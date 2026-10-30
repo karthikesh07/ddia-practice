@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chapter 4 · Encoding and Evolution — DDIA Practice</title>
+  <meta name="description" content="A comprehensive study guide to Chapter 4 of Designing Data-Intensive Applications: encoding formats (JSON, Thrift, Protocol Buffers, Avro), schema evolution, and modes of dataflow through databases, services, and message passing.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d14'/%3E%3Cpath d='M16 6l9 10-9 10-9-10z' fill='%23f0b35c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Spline+Sans:wght@300..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
+  
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-active="lessons" class="is-lesson">
+
+  <div class="reading-progress" id="readingProgress" aria-hidden="true"></div>
+
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="../index.html">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <rect x="1" y="2" width="16" height="4" rx="1.5" stroke="#f0b35c" stroke-width="1.6"/>
+          <rect x="1" y="7" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+          <rect x="1" y="12" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+        </svg>
+        DDIA&nbsp;<span class="dim">/ practice</span>
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="../index.html" data-nav="home">Home</a>
+        <a href="../index.html#lessons" data-nav="lessons">Lessons</a>
+        <a href="../flashcards.html" data-nav="flashcards">Flashcards</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+
+    <div class="lesson-hero">
+      <span class="lesson-hero-num" aria-hidden="true">4</span>
+      <div class="container">
+        <a class="crumb" href="../index.html#lessons">← All chapters</a>
+        <p class="kicker">Chapter 04 <span class="dim">· Part I — Foundations</span></p>
+        <h1>Encoding and Evolution</h1>
+        <p class="lede">Applications change; data outlives the code that wrote it. This chapter is about formats that let old and new code coexist without lying to each other.</p>
+        <div class="lesson-meta">
+          <span class="chip">Backward/forward compat</span>
+          <span class="chip">Thrift / Protobuf / Avro</span>
+          <span class="chip">REST &amp; RPC</span>
+          <span class="chip">Message passing</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pullquote container">
+      <p>“Everything changes and nothing stands still.”</p>
+      <cite>— Heraclitus of Ephesus, as quoted by Plato in Cratylus (360 BCE)</cite>
+    </div>
+
+    <div class="chapter-layout container">
+
+      <aside class="toc" aria-label="Chapter contents">
+        <p class="toc-title">Ch 4 contents</p>
+        <ul>
+          <li><a href="#s-intro">4.0 Evolvability</a></li>
+          <li><a href="#s-formats">4.1 Formats for encoding</a></li>
+          <li><a href="#s-langs" class="sub">Language-specific formats</a></li>
+          <li><a href="#s-json" class="sub">JSON, XML, CSV</a></li>
+          <li><a href="#s-binary" class="sub">Thrift, Protobuf, Avro</a></li>
+          <li><a href="#bytefigure" class="sub">The byte-count showdown</a></li>
+          <li><a href="#s-tags" class="sub">Field tags &amp; evolution</a></li>
+          <li><a href="#s-avro" class="sub">Avro: two schemas</a></li>
+          <li><a href="#s-dbflow">4.2 Dataflow through databases</a></li>
+          <li><a href="#s-services">4.3 Services: REST &amp; RPC</a></li>
+          <li><a href="#s-msg">4.4 Message passing</a></li>
+          <li><a href="#s-summary">4.5 Summary &amp; glossary</a></li>
+          <li><a href="#quiz-section">Quiz</a></li>
+        </ul>
+      </aside>
+
+      <div class="lesson-body">
+
+        <!-- ================= 4.0 ================= -->
+        <section class="block reveal" id="s-intro">
+          <p class="kicker">4.0 <span class="dim">·</span> The setup</p>
+          <h2>Rolling upgrades and the two compatibilities</h2>
+          <p>Chapter 1 introduced <strong>evolvability</strong>: build systems that make change easy. Applications inevitably change — features are added, requirements understood better, business circumstances shift — and a change to features usually means a change to the data they store: a new field, a new record type, an old thing presented in a new way.</p>
+          <p>The catch: in a large application, code changes can’t happen instantaneously. Server-side, you want <strong>rolling upgrades</strong> (staged rollouts) — deploy the new version to a few nodes at a time, check it’s running smoothly, and work through the fleet gradually: no downtime, more frequent releases, less risk. Client-side, you’re at the mercy of users who may not install the update for a long time. Either way, <strong>old and new versions of the code, and old and new data formats, coexist in the system at the same time</strong> — so the system must maintain compatibility in both directions:</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Backward compatibility</h4>
+              <p><strong>Newer code reads data written by older code.</strong> Normally the easy one — as the author of the new code, you know the old format and can handle it explicitly.</p>
+            </div>
+            <div class="term">
+              <h4>Forward compatibility</h4>
+              <p><strong>Older code reads data written by newer code.</strong> Trickier — requires old code to ignore additions made by newer versions of itself.</p>
+            </div>
+          </div>
+          <p>Relational databases assume all data conforms to one schema (changeable via <code>ALTER</code>, but exactly one in force at a time); schema-on-read “schemaless” databases allow a mixture of formats written at different times (Chapter 2). This chapter looks at how <strong>encoding formats</strong> — JSON, XML, Protocol Buffers, Thrift, Avro — handle schema change, and then at the three places encoded data flows: <strong>databases</strong>, <strong>services</strong> (REST/RPC), and <strong>asynchronous message passing</strong>.</p>
+        </section>
+
+        <!-- ================= 4.1 ================= -->
+        <section class="block reveal" id="s-formats">
+          <p class="kicker">4.1 <span class="dim">·</span> Objects to bytes</p>
+          <h2>Formats for encoding data</h2>
+          <p>Programs hold data in two representations. <strong>In memory</strong>: objects, structs, lists, arrays, hash tables, trees — optimized for CPU access, typically via pointers. <strong>To write it to a file or send it over the network</strong>: a self-contained <strong>sequence of bytes</strong> — a pointer is meaningless to any other process, so the byte form looks nothing like the in-memory form. The translation between them:</p>
+          <dl class="kv">
+            <div class="kv-row"><dt>Encoding</dt><dd>In-memory → bytes. Also called <strong>serialization</strong> or <strong>marshalling</strong>. (Nothing to do with encryption; and the book says “encoding” rather than “serialization” to avoid a collision with Chapter 7’s transaction sense of the word.)</dd></div>
+            <div class="kv-row"><dt>Decoding</dt><dd>Bytes → in-memory. Also called parsing, <strong>deserialization</strong>, unmarshalling.</dd></div>
+          </dl>
+
+          <h3 id="s-langs">Language-specific formats</h3>
+          <p>Most languages ship built-in encoders — Java’s <code>java.io.Serializable</code>, Ruby’s <code>Marshal</code>, Python’s <code>pickle</code>, third-party Kryo for Java. Convenient, but four deep problems:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">i.</span><div><h4>Language lock-in</h4><p>Reading the data from another language is very difficult — you’ve committed to your current language for potentially a very long time.</p></div></div>
+            <div class="num-card"><span class="n">ii.</span><div><h4>Security holes</h4><p>Restoring objects requires the decoder to <em>instantiate arbitrary classes</em> — an attacker who can feed your app an arbitrary byte sequence can often remotely execute code.</p></div></div>
+            <div class="num-card"><span class="n">iii.</span><div><h4>Versioning as afterthought</h4><p>Designed for quick-and-easy encoding; forward and backward compatibility are neglected.</p></div></div>
+            <div class="num-card"><span class="n">iv.</span><div><h4>Efficiency as afterthought</h4><p>Java’s built-in serialization is notorious for bad performance and bloated output.</p></div></div>
+          </div>
+          <p>Verdict: don’t use your language’s built-in encoding for anything beyond very transient purposes.</p>
+
+          <h3 id="s-json">JSON, XML, and CSV</h3>
+          <p>The standardized, many-language formats. Widely known, widely supported, almost as widely disliked — XML too verbose and complicated, JSON popular mainly via built-in browser support and relative simplicity, CSV less powerful. Beyond the syntax complaints, subtler problems:</p>
+          <ul class="checklist">
+            <li><strong>Numbers are ambiguous.</strong> XML and CSV can’t distinguish a number from a digit-string without an external schema; JSON distinguishes strings and numbers but <em>not</em> integers from floats, and specifies no precision. Integers greater than <strong>2⁵³</strong> can’t be exactly represented in an IEEE 754 double — so <strong>Twitter’s API returns each 64-bit tweet ID twice, as a JSON number and as a decimal string</strong>, to survive JavaScript parsing.</li>
+            <li><strong>No binary strings.</strong> Both handle Unicode text well but have no byte-sequence type. The workaround — Base64-encode and mark it in the schema — works but <strong>increases data size by 33%</strong>.</li>
+            <li><strong>Schemas are optional and heavy.</strong> XML/JSON schema languages are powerful, complicated to learn and implement; XML schemas are widespread, many JSON tools don’t bother. Without a schema, apps hardcode the encoding logic — and the correct interpretation of numbers and binary strings <em>depends on</em> the schema.</li>
+            <li><strong>CSV has no schema at all</strong> — the app defines the meaning of every row and column, and handles new columns manually. It’s vague (what if a value contains a comma or newline?), and although RFC 4180 formalized the escaping, not all parsers implement it correctly.</li>
+          </ul>
+          <p>Good enough anyway — especially as <strong>data interchange between organizations</strong>, where the difficulty of getting different organizations to agree on anything outweighs prettiness and efficiency. Internally, at terabyte scale, you can do better.</p>
+
+          <h4>Binary variants and the Example 4-1 record</h4>
+          <p>Binary encodings of JSON/XML exist in profusion (MessagePack, BSON, BJSON, UBJSON, BISON, Smile; WBXML, Fast Infoset) — niche adoption only, because they keep the JSON/XML data model and thus must <strong>repeat every field name inside the encoded data</strong>. The record we’ll encode six ways:</p>
+          <div class="code-block">{
+    "userName": "Martin",
+    "favoriteNumber": 1337,
+    "interests": ["daydreaming", "hacking"]
+}</div>
+          <p><strong>MessagePack</strong> (Figure 4-1) encodes it in <strong>66 bytes</strong> — barely less than the <strong>81 bytes</strong> of whitespace-free textual JSON. How it reads the first bytes: <code>0x83</code> = an object (top nibble 0x80) with 3 fields (bottom nibble 0x03); <code>0xa8</code> = a string (top nibble 0xa0) of 8 bytes; then the ASCII <code>userName</code> — no terminator or escaping needed, since the length was declared. A 33% space saving that costs you human-readability is a debatable trade.</p>
+
+          <h3 id="s-binary">Thrift and Protocol Buffers</h3>
+          <p><strong>Apache Thrift</strong> (from Facebook) and <strong>Protocol Buffers</strong> (from Google) — both open-sourced 2007–08 — are binary encodings that require a <strong>schema</strong>. The Example 4-1 record in Thrift’s interface definition language:</p>
+          <div class="code-block">struct Person {
+  1: required string       userName,
+  2: optional i64          favoriteNumber,
+  3: optional list&lt;string&gt; interests
+}</div>
+          <p>And the equivalent protobuf schema:</p>
+          <div class="code-block">message Person {
+    required string user_name       = 1;
+    optional int64  favorite_number = 2;
+    repeated string interests       = 3;
+}</div>
+          <p>Both ship <strong>code generation</strong>: the schema compiles to classes in your language of choice. And both replace field names with <strong>field tags</strong> — the 1, 2, 3 in the schemas — which is where the savings come from:</p>
+          <ul>
+            <li><strong>Thrift BinaryProtocol</strong>: <strong>59 bytes</strong>. Each field has a type annotation and, where needed, a length; strings in ASCII/UTF-8 like MessagePack — but <em>no field names</em>, just the tags.</li>
+            <li><strong>Thrift CompactProtocol</strong>: <strong>34 bytes</strong> — packs field type and tag into one byte, and encodes integers as <strong>variable-length integers (varints)</strong>: numbers between <strong>–64 and 63</strong> take one byte, <strong>–8192 to 8191</strong> take two, and so on — the top bit of each byte says whether more bytes follow. 1337 fits in two bytes, not eight.</li>
+            <li><strong>Protocol Buffers</strong>: <strong>33 bytes</strong>, the same ideas with slightly different bit packing. (Thrift also has a DenseProtocol — C++-only, so not cross-language — and two JSON-based formats.)</li>
+          </ul>
+          <p>One nuance: <code>required</code> vs. <code>optional</code> makes <strong>no difference to the encoding</strong> — nothing in the bytes says which a field was. <code>required</code> just enables a runtime check that fails if the field is unset — useful for catching bugs.</p>
+
+          <div class="figure" id="bytefigure">
+            <p class="fig-head">One record, six encodings · hover a row</p>
+            <div class="hbar-row" data-note="Textual JSON — human-readable; every field name spelled out in full: userName, favoriteNumber, interests.">
+              <span class="hbar-name">JSON (text)</span>
+              <span class="hbar-track"><i class="hbar-fill" style="width:100%"></i></span>
+              <span class="hbar-val">81 B</span>
+            </div>
+            <div class="hbar-row" data-note="MessagePack — binary JSON: type/length prefixes, but field names still written out in every record. 66 bytes, not a big win.">
+              <span class="hbar-name">MessagePack</span>
+              <span class="hbar-track"><i class="hbar-fill" style="width:81%"></i></span>
+              <span class="hbar-val">66 B</span>
+            </div>
+            <div class="hbar-row" data-note="Thrift BinaryProtocol — field names replaced by field tags (1, 2, 3); fixed-width integers.">
+              <span class="hbar-name">Thrift binary</span>
+              <span class="hbar-track"><i class="hbar-fill" style="width:73%"></i></span>
+              <span class="hbar-val">59 B</span>
+            </div>
+            <div class="hbar-row" data-note="Thrift CompactProtocol — packs type+tag into one byte; varints shrink 1337 from 8 bytes to 2.">
+              <span class="hbar-name">Thrift compact</span>
+              <span class="hbar-track"><i class="hbar-fill" style="width:42%"></i></span>
+              <span class="hbar-val">34 B</span>
+            </div>
+            <div class="hbar-row" data-note="Protocol Buffers — same ideas as Thrift compact, different bit packing.">
+              <span class="hbar-name">Protobuf</span>
+              <span class="hbar-track"><i class="hbar-fill" style="width:41%"></i></span>
+              <span class="hbar-val">33 B</span>
+            </div>
+            <div class="hbar-row best" data-note="Avro — no field names AND no tags: just concatenated values, decodable only against the schema that wrote them.">
+              <span class="hbar-name">Avro</span>
+              <span class="hbar-track"><i class="hbar-fill" style="width:40%"></i></span>
+              <span class="hbar-val">32 B</span>
+            </div>
+            <p class="fig-readout" id="byte-readout">hover a row to see what it spends its bytes on…</p>
+            <p class="fig-caption">Example 4-1 encoded six ways. The progression is the lesson: <strong>dropping field names</strong> (tags instead) buys 59 from 66; <strong>varints</strong> buy 34 from 59; and Avro’s <strong>schema-only encoding</strong> buys the last byte by dropping the tags too.</p>
+          </div>
+
+          <h3 id="s-tags">Field tags and schema evolution</h3>
+          <p>An encoded record is a concatenation of fields, each identified by its <strong>tag number</strong> and annotated with a datatype. From this, all the evolution rules follow:</p>
+          <ul class="checklist">
+            <li><strong>You can rename fields freely</strong> — the encoded data never mentions names. <strong>You can never change a tag</strong> — that instantly invalidates all existing encoded data.</li>
+            <li><strong>Adding a field is forward compatible:</strong> give it a <em>new</em> tag; old code that doesn’t recognize it just skips that many bytes (the datatype annotation tells it how many).</li>
+            <li><strong>Adding a field must not make it required:</strong> new code reading old data (which lacks the field) would fail the runtime check — so every field added after initial deployment must be <strong>optional or defaulted</strong>. That’s backward compatibility.</li>
+            <li><strong>Removing is the mirror image:</strong> you can only remove an <strong>optional</strong> field, and you can <strong>never reuse its tag number</strong> — old data out there still carries it, and it must be ignorable forever.</li>
+            <li><strong>Datatype changes are risky:</strong> 32-bit → 64-bit integer works for new-code-reads-old (pad with zeros), but old code reading new data <strong>truncates</strong> values that no longer fit in 32 bits.</li>
+          </ul>
+          <p>A curious protobuf detail: no list datatype, just a <code>repeated</code> marker — the same tag appears multiple times in a record. This buys you a free evolution: an <strong>optional (single-valued) field can become repeated</strong> — new code reading old data sees a list of zero-or-one elements; old code reading new data sees only the last element. Thrift’s dedicated list datatype can’t do this, but does support nested lists.</p>
+
+          <h3 id="s-avro">Avro: the schema is the message</h3>
+          <p><strong>Apache Avro</strong> (started 2009 as a Hadoop subproject, after Thrift proved a poor fit for Hadoop’s use cases) also uses a schema — in two languages, a human-editable <strong>Avro IDL</strong> and a machine-friendly <strong>JSON representation</strong>:</p>
+          <div class="code-block">record Person {
+    string               userName;
+    union { null, long } favoriteNumber = null;
+    array&lt;string&gt;        interests;
+}</div>
+          <p>No tag numbers anywhere. The Example 4-1 record encodes in <strong>32 bytes</strong> — the most compact of all, because the bytes contain <strong>nothing to identify fields or datatypes at all</strong>: just values concatenated together, a string is a length prefix plus UTF-8 bytes, an integer is a varint. You can only decode the bytes by walking the fields <em>in schema order</em> with the schema telling you each one’s type. Which raises the obvious question — whose schema?</p>
+          <div class="callout note">
+            <p class="callout-title">Writer’s schema vs. reader’s schema</p>
+            <p>The <strong>writer’s schema</strong> is whatever version the encoding application knows (say, compiled into it). The <strong>reader’s schema</strong> is what the decoding application expects (its own compiled-in version). Avro’s key idea: <strong>they don’t have to be the same — only compatible</strong>. At read time, the Avro library resolves the differences: fields matched <strong>by name</strong> (order irrelevant); writer fields the reader doesn’t know are <strong>ignored</strong>; reader fields the writer didn’t write are <strong>filled with declared defaults</strong>.</p>
+          </div>
+          <p><strong>Evolution rules:</strong> you may only add or remove a field that <em>has a default value</em>. Add without a default → new readers can’t read old writers (breaks backward compatibility). Remove without a default → old readers can’t read new writers (breaks forward). Nullability is also explicit: Avro won’t let you default anything to null unless null is a branch of a <strong>union type</strong> (<code>union { null, long }</code>) — more verbose than everything-nullable-by-default, but it prevents bugs (Tony Hoare called null references “the billion dollar mistake”). Datatype changes work when Avro can convert; field renames use <em>aliases</em> (backward compatible, not forward); new union branches likewise.</p>
+          <h4>But how does the reader know the writer’s schema?</h4>
+          <p>You can’t embed the whole schema per record — it would dwarf the data. Three contexts, three answers:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">i.</span><div><h4>Big files</h4><p>Millions of records, one writer: include the writer’s schema <strong>once at the head of the file</strong> — Avro’s <strong>object container files</strong> do exactly this. The Hadoop case.</p></div></div>
+            <div class="num-card"><span class="n">ii.</span><div><h4>Database with per-record writes</h4><p>Records written at different times by different schema versions: store a small <strong>version number at the start of each record</strong>, keep a database of schema versions, look up the writer’s schema on read (how LinkedIn’s Espresso works).</p></div></div>
+            <div class="num-card"><span class="n">iii.</span><div><h4>Network connections</h4><p>Two processes on a bidirectional connection <strong>negotiate the schema at connection setup</strong> and use it for the connection’s lifetime — the Avro RPC protocol’s approach.</p></div></div>
+          </div>
+          <p>A database of schema versions is worth keeping anyway — it documents your formats and lets you <strong>check compatibility before deploying</strong> a change.</p>
+          <h4>Why no tags turns out to be a feature</h4>
+          <p>Dynamically generated schemas. Dump a relational database to a file: generate an Avro record per table, one field per column — and when the database schema changes (a column added, a column dropped), <strong>just generate the new schema and export again</strong>; the fields match by name, so readers keep working. With Thrift/Protobuf, field tags would have to be assigned by hand — and never reused — because dynamic schemas were never their design goal. Avro also makes <strong>code generation optional</strong>: useful for statically typed languages (type checking, IDE help), pointless or annoying for dynamically typed ones (JavaScript, Ruby, Python) — and a positive obstacle when the schema itself is generated at runtime. Open an object container file with Apache Pig and analyze it without ever thinking about schemas — the file is <strong>self-describing</strong>.</p>
+          <div class="callout">
+            <p class="callout-title">The merits of schemas — four points</p>
+            <p>Binary schema-driven formats (1) are <strong>more compact</strong> than binary-JSON variants (field names omitted); (2) make the schema <strong>documentation that can’t drift</strong>, since decoding requires it; (3) allow <strong>compatibility checking before deployment</strong> via a schema registry; (4) enable <strong>code generation</strong> and compile-time type checking for statically typed languages. ASN.1 (1984) did tags-and-evolution first — it still encodes SSL certificates — but is complex, badly documented, and a poor choice for new applications.</p>
+          </div>
+        </section>
+
+        <!-- ================= 4.2 ================= -->
+        <section class="block reveal" id="s-dbflow">
+          <p class="kicker">4.2 <span class="dim">·</span> Flow #1</p>
+          <h2>Dataflow through databases</h2>
+          <p>In a database, the writing process encodes; the reading process decodes. Sometimes that’s one process — in which case writing to the database is <strong>sending a message to your future self</strong>, and backward compatibility is clearly required, or your future self can’t read what you wrote.</p>
+          <p>But usually several processes access the database at once, and during a rolling upgrade, <strong>some run newer code and some run older</strong>. A value written by newer code may be read by older code a moment later — so databases need <strong>forward compatibility too</strong>.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 4-7 (recreated) · How old code silently deletes new data</p>
+            <svg viewBox="0 0 780 210" role="img" aria-label="New code writes a record with a nicknames field; old code reads it, updates the record, re-encodes it — and the nicknames field is gone" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#5b6478"/>
+                </marker>
+              </defs>
+              <rect x="10" y="60" width="220" height="90" rx="10" fill="rgba(99,223,194,0.09)" stroke="#63dfc2"/>
+              <text x="120" y="84" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="11">NEW CODE writes</text>
+              <text x="120" y="104" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="11">{userName: "Martin",</text>
+              <text x="120" y="120" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="11"> favoriteNumber: 1337,</text>
+              <text x="120" y="136" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="11"> nicknames: ["mrtz"]}</text>
+              <line x1="235" y1="105" x2="290" y2="105" stroke="#5b6478" stroke-width="1.6" marker-end="url(#arr4)"/>
+              <rect x="295" y="60" width="190" height="90" rx="10" fill="#151c30" stroke="#2b3859"/>
+              <text x="390" y="94" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="11">in the database</text>
+              <text x="390" y="114" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10">(record with nicknames)</text>
+              <line x1="490" y1="105" x2="545" y2="105" stroke="#5b6478" stroke-width="1.6" marker-end="url(#arr4)"/>
+              <text x="517" y="96" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9">old code</text>
+              <text x="517" y="125" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9">reads + updates +</text>
+              <text x="517" y="138" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9">writes back</text>
+              <rect x="550" y="60" width="220" height="90" rx="10" fill="rgba(239,128,128,0.08)" stroke="#ef8080"/>
+              <text x="660" y="84" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="11">OLD CODE re-encodes</text>
+              <text x="660" y="104" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="11">{userName: "Martin",</text>
+              <text x="660" y="120" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="11"> favoriteNumber: 1337}</text>
+              <text x="660" y="140" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="11">✗ nicknames: gone</text>
+            </svg>
+            <p class="fig-caption">The snag: decode into application model objects, re-encode on write-back, and any field the old code didn’t know about can be dropped in translation. Formats can preserve unknown fields, but you sometimes have to take care at the application level — it’s not a hard problem, just one you must remember exists.</p>
+          </div>
+
+          <p>The other deep property of databases: <strong>data outlives code</strong>. You replace your application’s old version within minutes of deploying the new one, but a database contains values written <em>five milliseconds ago and five years ago</em> — still in the original encoding, unless you rewrote it. Rewriting (migrating) is possible but expensive, so databases avoid it: most add a column with a <code>NULL</code> default and fill the gap at read time; LinkedIn’s <strong>Espresso</strong> uses Avro, inheriting its schema-evolution rules — the whole database <em>appears</em> to be in one schema even though storage holds many historical versions. And when you archive or snapshot, you copy anyway — so dump consistently in the <strong>latest schema</strong>, into immutable Avro object container files, or an analytics-friendly column format like <strong>Parquet</strong>.</p>
+        </section>
+
+        <!-- ================= 4.3 ================= -->
+        <section class="block reveal" id="s-services">
+          <p class="kicker">4.3 <span class="dim">·</span> Flow #2</p>
+          <h2>Dataflow through services: REST and RPC</h2>
+          <p>The most common network arrangement: <strong>servers expose an API; clients connect to make requests</strong> — a <em>service</em>. The web itself works this way (browsers GET/POST against servers via standardized protocols); so do native mobile apps, and in-browser JavaScript apps via <code>XMLHttpRequest</code> (the <strong>Ajax</strong> technique) — except the responses are JSON for code to process, not HTML for humans. A server can itself be a client of another service (a web app server is a client of its database), and decomposing a large application into services by functionality — one service requesting from another — is <strong>service-oriented architecture (SOA)</strong>, lately refined and rebranded as <strong>microservices</strong>.</p>
+          <p>Services are like databases with training wheels: both let clients submit and query data, but services expose an <strong>application-specific API</strong> permitting only what the business logic allows — a useful encapsulation. And the key design goal of microservices: <strong>independently deployable, independently evolvable services</strong> — each owned by a team releasing frequently without coordinating — which means old and new versions of clients and servers run simultaneously, and the encodings must be compatible across API versions. Exactly this chapter’s problem.</p>
+          <p>When HTTP underlies the service, it’s a <strong>web service</strong> — a slight misnomer, since it’s used in three quite different contexts: (1) client apps on user devices talking to services over the <strong>public internet</strong>; (2) one service talking to another inside the same organization, same datacenter (the software supporting this is sometimes called <em>middleware</em>); (3) services of different organizations exchanging data via the internet — public APIs like credit-card processing or <strong>OAuth</strong>.</p>
+
+          <h3>REST and SOAP</h3>
+          <p>Two popular approaches, philosophically almost opposite. <strong>REST</strong> is not a protocol but a <strong>design philosophy</strong> built on HTTP’s principles: simple data formats, URLs identifying resources, HTTP features for cache control, authentication, and content negotiation. An API built this way is <strong>RESTful</strong>; REST has been gaining popularity, especially for cross-organizational integration, and is often associated with microservices. <strong>SOAP</strong> is an XML-based protocol that aims to be independent of HTTP (avoiding most of its features) and brings a sprawling framework of WS-* standards; its APIs are described in <strong>WSDL</strong> (XML), which enables code generation — useful in statically typed languages, less so in dynamic ones, and not human-readable or hand-constructible: SOAP users live in tooling. Despite being ostensibly standardized, SOAP interop between vendors’ implementations often causes problems. It survives in large enterprises; smaller companies have moved on. RESTful APIs favor simpler approaches with less generated code — description formats like <strong>OpenAPI/Swagger</strong> for documentation.</p>
+
+          <h3>The problems with RPC</h3>
+          <p>Web services are the latest in a long line of technologies for making API requests over a network — and many were seriously flawed. <strong>EJB and Java RMI</strong> (Java-only), <strong>DCOM</strong> (Microsoft-only), <strong>CORBA</strong> (excessively complex, no compatibility guarantees). All based on the <strong>remote procedure call</strong> — around since the 1970s — whose ambition is <strong>location transparency</strong>: a network request that looks like a local function call. The approach is fundamentally flawed, because a network request is a different animal:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">i.</span><div><h4>Unpredictability</h4><p>A local call succeeds or fails based on parameters you control; a network request can be lost, slowed, or the remote machine unavailable — entirely outside your control. Retries become mandatory.</p></div></div>
+            <div class="num-card"><span class="n">ii.</span><div><h4>Timeouts</h4><p>A local call returns, throws, or hangs. A network request has a fourth outcome: <strong>returns without a result due to timeout</strong> — and you have no idea whether the request got through.</p></div></div>
+            <div class="num-card"><span class="n">iii.</span><div><h4>Retries aren’t free</h4><p>If only the <em>responses</em> are getting lost, a retry performs the action multiple times — you need <strong>deduplication (idempotence)</strong> in the protocol. Local calls never needed that.</p></div></div>
+            <div class="num-card"><span class="n">iv.</span><div><h4>Wild latency</h4><p>A local call takes roughly the same time every time; a network request varies from under a millisecond to many seconds for identical work under congestion.</p></div></div>
+            <div class="num-card"><span class="n">v.</span><div><h4>Parameters must be bytes</h4><p>Locally you pass pointers; over the wire, everything must be encoded — fine for numbers and strings, painful for large objects.</p></div></div>
+            <div class="num-card"><span class="n">vi.</span><div><h4>Cross-language types</h4><p>Client and service may use different languages; translating datatypes between them gets ugly — recall JavaScript’s 2⁵³ problem.</p></div></div>
+          </div>
+          <p>Moral: don’t make a remote service look too much like a local object — it’s a different thing. Part of REST’s appeal is that it doesn’t pretend otherwise. Yet RPC isn’t going away: <strong>gRPC</strong> (Protocol Buffers), <strong>Finagle</strong> (Thrift), and <strong>Rest.li</strong> (JSON over HTTP) all build RPC on this chapter’s encodings — and the new generation is honest about the difference: Finagle and Rest.li use <strong>futures (promises)</strong> for async-possibly-failing actions and easy parallel fan-out; gRPC supports <strong>streams</strong> (many requests and responses over time); several add <strong>service discovery</strong> (which IP:port serves which service). Custom binary RPC can beat generic JSON-over-REST on performance — but REST wins on experimentation (curl, browsers), universal language support, and its enormous tooling ecosystem. Hence REST’s dominance for <strong>public APIs</strong>, with RPC mostly for same-organization, same-datacenter traffic.</p>
+          <div class="callout note">
+            <p class="callout-title">Evolvability of service APIs</p>
+            <p>The simplifying assumption for services: <strong>servers upgrade first, clients second</strong> — so you need <strong>backward compatibility on requests</strong> and <strong>forward compatibility on responses</strong> (inherited from whatever encoding carries them). But across organizations you don’t control clients and can’t force upgrades: compatibility must hold for a long time, <em>perhaps indefinitely</em> — and breaking changes mean running multiple API versions side by side. No consensus exists on versioning: version in the URL, in the HTTP Accept header, or (Stripe-style) per-client API keys with server-side version selection.</p>
+          </div>
+        </section>
+
+        <!-- ================= 4.4 ================= -->
+        <section class="block reveal" id="s-msg">
+          <p class="kicker">4.4 <span class="dim">·</span> Flow #3</p>
+          <h2>Message-passing dataflow</h2>
+          <p><strong>Asynchronous message passing</strong> sits between RPC and databases: like RPC, a client’s <strong>message</strong> is delivered to another process with low latency; like a database, it goes through an intermediary that stores it — a <strong>message broker</strong> (message queue, message-oriented middleware) rather than a direct network connection. (Commercially: TIBCO, IBM WebSphere, webMethods; open source: RabbitMQ, ActiveMQ, HornetQ, NATS, Apache Kafka.)</p>
+          <div class="callout">
+            <p class="callout-title">Five things a broker buys you over direct RPC</p>
+            <p>(1) <strong>Buffers</strong> if the recipient is unavailable or overloaded — reliability. (2) <strong>Automatic redelivery</strong> to a process that crashed — no lost messages. (3) The sender doesn’t need the recipient’s <strong>IP:port</strong> — valuable in cloud deployments where VMs come and go. (4) One message to <strong>several recipients</strong>. (5) Logical <strong>decoupling of sender from recipient</strong> — the sender just publishes.</p>
+          </div>
+          <p>Usage: one process sends to a named <strong>queue or topic</strong>; the broker delivers to one or more <strong>consumers/subscribers</strong>; many producers and consumers can share a topic. It’s normally <strong>one-way</strong> — a sender doesn’t expect a reply (a reply can ride a separate <strong>reply queue</strong> if needed, chaining topics into request/response flows). Brokers enforce no data model — a message is just bytes with metadata — so any encoding works, and with a backward-and-forward-compatible one, publishers and consumers can be changed and deployed <em>independently, in any order</em>. (Careful when a consumer republishes to another topic: preserve unknown fields, or Figure 4-7 strikes again.)</p>
+
+          <h3>Distributed actor frameworks</h3>
+          <p>The <strong>actor model</strong> is a single-process concurrency model: instead of wrangling threads (races, locks, deadlock), logic lives in <strong>actors</strong>, each typically representing one client or entity, holding private local state, communicating only via asynchronous messages — delivery <em>not guaranteed</em>; messages can be lost. Each actor processes one message at a time, so no threads to worry about, and the framework schedules actors independently.</p>
+          <p><strong>Distributed actor frameworks</strong> scale the model across nodes: same message-passing, whether sender and recipient are on the same machine or not — across nodes the message is transparently encoded, sent, and decoded. Location transparency works <em>better</em> here than in RPC, because the actor model already assumed messages may be lost even in-process — less fundamental mismatch between local and remote. A distributed actor framework is essentially a message broker and the actor model fused into one framework — but rolling upgrades still require forward and backward compatibility of the message encodings. The three big frameworks:</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Akka</h4>
+              <p>Java-built-in serialization by default — <em>no</em> forward/backward compatibility. Swap in Protocol Buffers and rolling upgrades become possible.</p>
+            </div>
+            <div class="term">
+              <h4>Orleans</h4>
+              <p>Custom encoding by default, no rolling upgrades — you stand up a new cluster and move traffic over. Pluggable serialization, like Akka.</p>
+            </div>
+            <div class="term">
+              <h4>Erlang OTP</h4>
+              <p>Rolling upgrades possible but carefully planned — record schema changes are surprisingly hard, despite the system’s high-availability pedigree. The <code>maps</code> datatype (Erlang R17, 2014) may make it easier.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= 4.5 ================= -->
+        <section class="block reveal" id="s-summary">
+          <p class="kicker">4.5 <span class="dim">·</span> Pulling it together</p>
+          <h2>Summary</h2>
+          <p>Encoding details affect not just efficiency but the <em>architecture</em> of applications and deployment options. Rolling upgrades — gradual, no-downtime, low-risk, and thus frequent — demand that all data flowing through the system be readable by both old and new code:</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Dataflow mode</th><th>Who encodes / decodes</th><th>Compatibility needed</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Databases</strong></td><td>Writing process encodes; reading process decodes — possibly a later version of yourself; during rolling upgrades, mixed old/new processes share the store</td><td>Backward <em>and</em> forward; beware re-encoding dropping unknown fields</td></tr>
+                <tr><td><strong>Services (REST/RPC)</strong></td><td>Client encodes request → server decodes; server encodes response → client decodes</td><td>Backward compat on requests, forward compat on responses (servers upgrade first)</td></tr>
+                <tr><td><strong>Message passing</strong></td><td>Sender encodes, broker stores, recipient decodes — independently deployable in any order</td><td>Whatever the encoding provides — compatible encoding = maximum freedom</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>And the formats themselves: language-specific encodings (single language, weak compatibility), textual JSON/XML/CSV (widespread; vague about datatypes — mind the numbers), and binary schema-driven Thrift/Protobuf/Avro (compact, clearly defined compatibility semantics, schemas as documentation and codegen source; the cost: bytes aren’t human-readable). With a bit of care, backward/forward compatibility and rolling upgrades are quite achievable. <em>May your application’s evolution be rapid and your deployments be frequent.</em></p>
+
+          <h3>Glossary</h3>
+          <dl class="kv">
+            <div class="kv-row"><dt>encoding / decoding</dt><dd>In-memory → bytes, and back. A.k.a. serialization/marshalling and parsing/deserialization — the book says “encoding” to dodge the transaction sense of “serialization”.</dd></div>
+            <div class="kv-row"><dt>backward compatibility</dt><dd>Newer code can read data written by older code — usually the easy direction.</dd></div>
+            <div class="kv-row"><dt>forward compatibility</dt><dd>Older code can read data written by newer code — requires ignoring unknown additions.</dd></div>
+            <div class="kv-row"><dt>rolling upgrade / staged rollout</dt><dd>Deploying a new version a few nodes at a time — no downtime, less risk, more frequent releases.</dd></div>
+            <div class="kv-row"><dt>data outlives code</dt><dd>Databases hold values written years ago in the original encoding, long after the writing code was replaced.</dd></div>
+            <div class="kv-row"><dt>field tag</dt><dd>Numeric alias for a field in Thrift/Protobuf — its stable identity across schema versions; renamable names, unchangeable tags, never reused.</dd></div>
+            <div class="kv-row"><dt>varint</dt><dd>Variable-length integer: –64…63 in one byte, –8192…8191 in two, etc.; the top bit announces more bytes. How 1337 shrinks to 2 bytes.</dd></div>
+            <div class="kv-row"><dt>writer’s / reader’s schema</dt><dd>Avro’s two schemas: the one the data was encoded with, and the one the application expects — they need only be compatible, resolved by field name with defaults.</dd></div>
+            <div class="kv-row"><dt>object container file</dt><dd>Avro’s file with the writer’s schema once at the head — self-describing; ideal for big immutable dumps.</dd></div>
+            <div class="kv-row"><dt>dynamic schemas</dt><dd>Avro’s superpower: schemas generated on the fly (e.g., from a database’s tables) and matched by field name — no hand-assigned tags to keep stable.</dd></div>
+            <div class="kv-row"><dt>location transparency</dt><dd>The RPC abstraction that pretends a remote call is a local one — fundamentally flawed because networks fail unpredictably.</dd></div>
+            <div class="kv-row"><dt>REST / RESTful</dt><dd>A design philosophy on HTTP’s principles: URLs as resources, HTTP for caching/auth/negotiation. “RESTful” = an API so designed.</dd></div>
+            <div class="kv-row"><dt>SOAP / WSDL</dt><dd>XML-based protocol with the WS-* framework, described in WSDL for codegen; interop problems, fading outside enterprises.</dd></div>
+            <div class="kv-row"><dt>SOA / microservices</dt><dd>Decomposing an application into services by functionality, independently deployable and evolvable; microservices = the rebrand.</dd></div>
+            <div class="kv-row"><dt>idempotence</dt><dd>Retrying a request doesn’t perform the action twice — mandatory once timeouts force retries.</dd></div>
+            <div class="kv-row"><dt>futures / promises</dt><dd>Encapsulation of async, possibly-failing actions; enables parallel requests to multiple services (Finagle, Rest.li).</dd></div>
+            <div class="kv-row"><dt>service discovery</dt><dd>Letting a client learn which IP:port currently serves a given service.</dd></div>
+            <div class="kv-row"><dt>message broker</dt><dd>Intermediary storing messages temporarily: buffers, redelivers, hides locations, fans out, decouples — RabbitMQ, Kafka, etc.</dd></div>
+            <div class="kv-row"><dt>actor model</dt><dd>Concurrency via private-state actors passing async, lossy messages one at a time; distributed frameworks extend it across nodes (Akka, Orleans, Erlang OTP).</dd></div>
+            <div class="kv-row"><dt>ASN.1</dt><dd>1984 schema-definition language with tag-based evolution; still encodes SSL certificates, poor choice for new apps.</dd></div>
+          </dl>
+
+          <h3>Further reading</h3>
+          <ul class="reading-list">
+            <li><strong>Martin Kleppmann, “Schema Evolution in Avro, Protocol Buffers and Thrift”</strong><span class="src">martin.kleppmann.com, December 2012 — the author’s own byte-by-byte comparison</span></li>
+            <li><strong>Tony Hoare, “Null References: The Billion Dollar Mistake”</strong><span class="src">QCon London, March 2009</span></li>
+            <li><strong>Roy Thomas Fielding, “Architectural Styles and the Design of Network-Based Software Architectures”</strong><span class="src">PhD thesis, UC Irvine, 2000 — REST’s origin</span></li>
+            <li><strong>Waldo et al., “A Note on Distributed Computing”</strong><span class="src">Sun Microsystems, 1994 — why local and remote calls can’t really be the same</span></li>
+            <li><strong>Birrell &amp; Nelson, “Implementing Remote Procedure Calls”</strong><span class="src">ACM TOCS, February 1984</span></li>
+            <li><strong>Michi Henning, “The Rise and Fall of CORBA”</strong><span class="src">ACM Queue, June 2006 — a cautionary RPC history</span></li>
+            <li><strong>Sam Newman, Building Microservices</strong><span class="src">O’Reilly, 2015</span></li>
+          </ul>
+        </section>
+
+        <!-- ================= quiz ================= -->
+        <section class="quiz-wrap" id="quiz-section">
+          <div class="quiz-head">
+            <div>
+              <p class="kicker">Check yourself <span class="dim">· 12 questions</span></p>
+              <h2>Chapter 4 quiz</h2>
+              <p>Two written, ten multiple-choice — formats, tags, and the three flows.</p>
+            </div>
+            <span class="chip" id="quiz-last">no score yet</span>
+          </div>
+          <div id="quiz"></div>
+          <button class="mark-complete" id="mark-complete" type="button">Mark chapter complete</button>
+        </section>
+
+        <nav class="lesson-pager">
+          <a class="pager-link" href="chapter3.html">
+            <span class="dir">← Previous</span>
+            <span class="title">Storage and Retrieval</span>
+          </a>
+          <a class="pager-link next" href="chapter5.html">
+            <span class="dir">Next chapter →</span>
+            <span class="title">Replication</span>
+          </a>
+        </nav>
+
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container foot-inner">
+      <p>DDIA practice companion · a fan-made study aid for<br>“Designing Data-Intensive Applications” by Martin Kleppmann (O’Reilly)</p>
+      <p>static site · no trackers · progress in localStorage</p>
+    </div>
+  </footer>
+
+  <script>
+    window.QUIZ = {
+      lesson: 'chapter4',
+      questions: [
+        {
+          q: 'New code writes a record with a field old code doesn’t know; old code then reads the record, updates it, and writes it back. What must happen for the new field to survive — and why does the risk exist at all? Then reveal.',
+          short: true,
+          answer: 'The old code must preserve the unknown field on write-back. The risk exists because decoding into application model objects and re-encoding them can drop fields the old code never knew about — Figure 4-7’s data loss. Encoding formats can support preserving unknown fields, but you sometimes need to handle it at the application level: be aware, and don’t blindly round-trip records through models that lack the field.'
+        },
+        {
+          q: 'A message broker sits between your services. Explain what it decouples — and what that independence buys you for deployments. Then reveal.',
+          short: true,
+          answer: 'The broker decouples sender from recipient: it buffers when the recipient is down or overloaded, redelivers after crashes, hides the recipient’s location (no IP:port knowledge), fans one message to many recipients, and the sender just publishes without caring who consumes. If the message encoding is backward- and forward-compatible, publishers and consumers can be changed and deployed independently, in any order — including rolling upgrades.'
+        },
+        {
+          q: 'Backward vs. forward compatibility — which is which?',
+          options: [
+            'Backward: old code reads new data. Forward: new code reads old data',
+            'Backward: newer code can read data written by older code. Forward: older code can read data written by newer code',
+            'Backward: rolling back a deployment. Forward: rolling forward',
+            'They are synonyms for the same requirement'
+          ],
+          answer: 1,
+          why: 'Backward = new code reads old data (the easy direction — you know the old format). Forward = old code reads new data (tricky — old code must ignore additions it doesn’t recognize).'
+        },
+        {
+          q: 'Why are Java/Python/Ruby built-in serialization (java.io.Serializable, pickle, Marshal) a bad idea for stored or transmitted data?',
+          options: [
+            'They are too slow for any real workload',
+            'They lock you into one language, decoding requires instantiating arbitrary classes (a remote-code-execution security hole), and versioning and efficiency are afterthoughts',
+            'They only work on Windows',
+            'They produce uncompressed output'
+          ],
+          answer: 1,
+          why: 'Four deep problems: language lock-in; security (arbitrary class instantiation from attacker-controlled bytes); versioning as an afterthought; efficiency as an afterthought (Java serialization’s performance is notorious).'
+        },
+        {
+          q: 'Twitter’s API returns each tweet ID twice — as a JSON number AND as a decimal string. Why?',
+          options: [
+            'Redundancy in case one copy is corrupted',
+            'Integers above 2^53 can’t be exactly represented in an IEEE 754 double, so JavaScript (and other float-parsing languages) silently mangle 64-bit tweet IDs — the string survives',
+            'JSON numbers can’t exceed 32 bits',
+            'To support both SQL and NoSQL clients'
+          ],
+          answer: 1,
+          why: 'JSON doesn’t distinguish integers from floats or specify precision; JS parses numbers as doubles, and 64-bit IDs exceed 2^53 — so the same ID ships as both a number and a string that survives float parsing.'
+        },
+        {
+          q: 'Why can you rename a Protobuf field but never change its tag number?',
+          options: [
+            'Tags are checksummed against the data',
+            'The encoded bytes never contain field names — only tags. Rename: invisible in the data. Change the tag: every existing encoded record now interprets those bytes as a different field — instant invalidation',
+            'The schema registry forbids renames',
+            'Tags encode the datatype, names don’t'
+          ],
+          answer: 1,
+          why: 'Tags ARE the field’s identity in the encoded data — a compact alias standing in for the name. Names are documentation; tags are the wire format. Changing one re-labels every historical record.'
+        },
+        {
+          q: 'You add a new field to a Protobuf schema after deployment. What must be true for backward compatibility?',
+          options: [
+            'The field must be required',
+            'The field must be optional or have a default value — new code reading old data (which lacks the field) must not fail the required-check',
+            'The field must reuse an existing tag number',
+            'The field must be a varint'
+          ],
+          answer: 1,
+          why: 'New code (with the new field) reading old data (without it): if the field were required, the runtime check fails on every historical record. Optional/defaulted additions keep old data readable — that’s backward compatibility.'
+        },
+        {
+          q: 'How does Avro decode data without any field names or tags in the bytes?',
+          options: [
+            'It guesses from the byte patterns',
+            'The reader resolves the writer’s schema (what encoded the data) against the reader’s schema (what the app expects): fields matched by name, unknown writer fields ignored, missing reader fields filled with defaults',
+            'Every record embeds the full schema inline',
+            'It can’t — Avro requires identical schemas on both ends'
+          ],
+          answer: 1,
+          why: 'The bytes are just values in schema order; decoding walks the schema. Avro’s trick is that the two schemas need only be compatible — matched by name, extras ignored, gaps defaulted. The writer’s schema travels via file header, version-number lookup, or connection negotiation.'
+        },
+        {
+          q: 'Why is Avro friendlier to dynamically generated schemas (e.g., dumping a changing relational database) than Thrift/Protobuf?',
+          options: [
+            'Avro compresses better',
+            'With no tag numbers, you regenerate the schema whenever the database changes and fields still match by name — with tags, every schema change needs carefully hand-maintained, never-reused tag assignments',
+            'Avro schemas are written in JSON, which is easier to template',
+            'Avro doesn’t need code generation at all'
+          ],
+          answer: 1,
+          why: 'Tag-based formats require stable, manually curated tag assignments — reusing a retired tag corrupts interpretation. Avro matches fields by name, so a freshly generated schema just works — dynamic schemas were a design goal for Hadoop use cases.'
+        },
+        {
+          q: 'An RPC times out. What do you actually know?',
+          options: [
+            'The request never reached the server',
+            'The server processed it and the response was lost',
+            'Nothing — the request may or may not have been processed; only the response is missing. Retry blindly and you may perform the action twice, which is why idempotence belongs in the protocol',
+            'The connection is permanently dead'
+          ],
+          answer: 2,
+          why: 'Timeout is the fourth outcome a local function call never has: no result, no knowledge. Retries may hit a server that already processed the request (only the response was lost) — hence deduplication/idempotence machinery.'
+        },
+        {
+          q: 'Why does location transparency work better in the actor model than in classic RPC?',
+          options: [
+            'Actors use faster network protocols',
+            'The actor model already assumes messages can be lost even within a single process — so the gap between local and remote communication is much smaller than the gap RPC pretends doesn’t exist',
+            'Actors always run on the same machine',
+            'Actor messages are always encoded as JSON'
+          ],
+          answer: 1,
+          why: 'RPC’s fatal pretense is that remote calls behave like local ones — they don’t. Actors never made that promise: async, possibly-lost messages are the model even in-process, so extending it across nodes adds latency but no fundamental mismatch.'
+        },
+        {
+          q: 'For evolvability of a service API, the chapter makes a simplifying assumption about deployment order. What is it?',
+          options: [
+            'Clients always upgrade before servers',
+            'All servers upgrade first, then all clients — so you only need backward compatibility on requests and forward compatibility on responses',
+            'Everything upgrades simultaneously in a maintenance window',
+            'Version negotiation happens per request'
+          ],
+          answer: 1,
+          why: 'Servers first, clients second: old clients talk to new servers (backward compat on requests — new server understands old requests) and new servers answer old clients (forward compat on responses — old client tolerates new fields).'
+        }
+      ]
+    };
+  </script>
+  <script src="../js/shared.js"></script>
+  <script src="../js/quiz.js"></script>
+  <script src="../js/toc.js"></script>
+  <script>
+    /* interactive byte-size chart readout */
+    (function () {
+      var readout = document.getElementById('byte-readout');
+      var rows = document.querySelectorAll('#bytefigure .hbar-row');
+      if (!readout || !rows.length) return;
+      rows.forEach(function (row) {
+        row.addEventListener('mouseenter', function () {
+          readout.textContent = row.getAttribute('data-note') || '';
+        });
+      });
+      var fig = document.getElementById('bytefigure');
+      fig.addEventListener('mouseleave', function () {
+        readout.textContent = 'hover a row to see what it spends its bytes on…';
+      });
+    })();
+  </script>
+</body>
+</html>

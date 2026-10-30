@@ -1,0 +1,922 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chapter 11 · Stream Processing — DDIA Practice</title>
+  <meta name="description" content="A comprehensive study guide to Chapter 11 of Designing Data-Intensive Applications: events and messaging systems, message brokers versus databases, load balancing and fan-out, acknowledgments and redelivery, log-based message brokers and partitioned logs, consumer offsets and replay, dual writes and change data capture, event sourcing, commands versus events, immutability and CQRS, complex event processing, stream analytics, event time versus processing time, tumbling hopping sliding and session windows, stream-stream stream-table and table-table joins, microbatching, checkpoints, idempotence and exactly-once semantics.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d14'/%3E%3Cpath d='M16 6l9 10-9 10-9-10z' fill='%23f0b35c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Spline+Sans:wght@300..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
+  
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-active="lessons" class="is-lesson">
+
+  <div class="reading-progress" id="readingProgress" aria-hidden="true"></div>
+
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="../index.html">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <rect x="1" y="2" width="16" height="4" rx="1.5" stroke="#f0b35c" stroke-width="1.6"/>
+          <rect x="1" y="7" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+          <rect x="1" y="12" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+        </svg>
+        DDIA&nbsp;<span class="dim">/ practice</span>
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="../index.html" data-nav="home">Home</a>
+        <a href="../index.html#lessons" data-nav="lessons">Lessons</a>
+        <a href="../flashcards.html" data-nav="flashcards">Flashcards</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+
+    <div class="lesson-hero">
+      <span class="lesson-hero-num" aria-hidden="true">11</span>
+      <div class="container">
+        <a class="crumb" href="../index.html#lessons">← All chapters</a>
+        <p class="kicker">Chapter 11 <span class="dim">· Part III — Derived Data</span></p>
+        <h1>Stream Processing</h1>
+        <p class="lede">Chapter 10’s one assumption — that the input is bounded — quietly disappears. Everything else follows: logs become brokers, databases become streams, and time itself becomes something you have to reason about.</p>
+        <div class="lesson-meta">
+          <span class="chip">Log-based brokers</span>
+          <span class="chip">CDC</span>
+          <span class="chip">Event sourcing</span>
+          <span class="chip">Windows &amp; joins</span>
+          <span class="chip">Exactly-once</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pullquote container">
+      <p>“A complex system that works is invariably found to have evolved from a simple system that works. The inverse proposition also appears to be true: a complex system designed from scratch never works and cannot be made to work.”</p>
+      <cite>— John Gall, Systemantics (1975), the chapter’s epigraph</cite>
+    </div>
+
+    <div class="chapter-layout container">
+
+      <aside class="toc" aria-label="Chapter contents">
+        <p class="toc-title">Ch 11 contents</p>
+        <ul>
+          <li><a href="#s-intro">11.0 The unbounded input</a></li>
+          <li><a href="#s-event" class="sub">What is an event</a></li>
+          <li><a href="#s-transmit">11.1 Transmitting streams</a></li>
+          <li><a href="#s-messaging" class="sub">Two hard questions</a></li>
+          <li><a href="#s-direct" class="sub">Direct messaging</a></li>
+          <li><a href="#s-brokers" class="sub">Message brokers</a></li>
+          <li><a href="#s-brokervsdb" class="sub">Brokers vs databases</a></li>
+          <li><a href="#s-consumers" class="sub">Load balancing vs fan-out</a></li>
+          <li><a href="#s-acks" class="sub">Acks &amp; redelivery</a></li>
+          <li><a href="#s-partlogs" class="sub">Partitioned logs</a></li>
+          <li><a href="#s-logvstrad" class="sub">Logs vs traditional brokers</a></li>
+          <li><a href="#s-offsets" class="sub">Consumer offsets</a></li>
+          <li><a href="#s-diskspace" class="sub">Disk space &amp; retention</a></li>
+          <li><a href="#s-replay" class="sub">Replaying old messages</a></li>
+          <li><a href="#s-dbstreams">11.2 Databases and streams</a></li>
+          <li><a href="#s-sync" class="sub">Keeping systems in sync</a></li>
+          <li><a href="#s-dualwrites" class="sub">The dual-writes race</a></li>
+          <li><a href="#s-cdc" class="sub">Change data capture</a></li>
+          <li><a href="#s-cdcimpl" class="sub">Triggers vs the log</a></li>
+          <li><a href="#s-snapshot" class="sub">Initial snapshot</a></li>
+          <li><a href="#s-compaction" class="sub">Log compaction</a></li>
+          <li><a href="#s-changestreams" class="sub">Change-stream APIs</a></li>
+          <li><a href="#s-eventsourcing" class="sub">Event sourcing</a></li>
+          <li><a href="#s-deriving" class="sub">Deriving current state</a></li>
+          <li><a href="#s-commands" class="sub">Commands vs events</a></li>
+          <li><a href="#s-immutability" class="sub">State &amp; immutability</a></li>
+          <li><a href="#s-cqrs" class="sub">Several views / CQRS</a></li>
+          <li><a href="#s-concurrency" class="sub">Concurrency control</a></li>
+          <li><a href="#s-immlimits" class="sub">Limits of immutability</a></li>
+          <li><a href="#s-processing">11.3 Processing streams</a></li>
+          <li><a href="#s-uses" class="sub">What streams are for</a></li>
+          <li><a href="#s-time" class="sub">Reasoning about time</a></li>
+          <li><a href="#s-stragglers" class="sub">Stragglers</a></li>
+          <li><a href="#s-clocks" class="sub">Whose clock?</a></li>
+          <li><a href="#s-windows" class="sub">Four window types</a></li>
+          <li><a href="#s-joins" class="sub">Stream joins</a></li>
+          <li><a href="#s-timedep" class="sub">Time-dependence</a></li>
+          <li><a href="#s-fault" class="sub">Fault tolerance</a></li>
+          <li><a href="#s-idempotence" class="sub">Idempotence &amp; fencing</a></li>
+          <li><a href="#s-rebuild" class="sub">Rebuilding state</a></li>
+          <li><a href="#s-summary">11.4 Summary &amp; glossary</a></li>
+          <li><a href="#quiz-section">Quiz</a></li>
+        </ul>
+      </aside>
+
+      <div class="lesson-body">
+
+        <!-- ================= 11.0 ================= -->
+        <section class="block reveal" id="s-intro">
+          <p class="kicker">11.0 <span class="dim">·</span> The setup</p>
+          <h2>The unbounded input</h2>
+          <p>Batch processing reads a set of files and produces new files — derived data, recreatable by running the process again. But everything in Chapter 10 rested on one assumption: <strong>the input is bounded</strong>, of known and finite size, so the process knows when it has finished reading. The sorting at the heart of MapReduce is the purest example — it must read its <em>entire</em> input before producing any output, because the very last record might carry the lowest key and need to come out first.</p>
+          <p>In reality, much data is unbounded because it arrives gradually over time: your users produced data yesterday and today, and they will produce more tomorrow. Unless you go out of business, the process never ends, and the dataset is never “complete” in any meaningful way. Batch processors cope by artificially dividing the data into chunks of fixed duration — a day’s worth at the end of every day, an hour’s worth at the end of every hour. The problem with daily batch processes: changes in the input are only reflected in the output a day later, which is too slow for many impatient users. Run it more frequently — a second’s worth at the end of every second — or abandon fixed time slices entirely and <strong>process every event as it happens</strong>. That is stream processing.</p>
+          <p>In general, a <strong>stream</strong> is data that is incrementally made available over time. The concept appears in many places: the <code>stdin</code> and <code>stdout</code> of Unix, lazy lists in programming languages, filesystem APIs like Java’s <code>FileInputStream</code>, TCP connections, audio and video delivered over the internet. This chapter treats <strong>event streams</strong> as a data management mechanism: how they are represented, stored, and transmitted; what they have to do with databases; and how to process them continually.</p>
+
+          <h3 id="s-event">11.0.1 — What is an event?</h3>
+          <p>In a batch job, the first step is parsing a file into records. In a stream, a record is more commonly known as an <strong>event</strong> — essentially the same thing: a <strong>small, self-contained, immutable object containing the details of something that happened at some point in time</strong>. An event usually carries a timestamp indicating when it happened, according to a time-of-day clock (Chapter 8’s warnings about those clocks will matter later in this chapter).</p>
+          <ul class="checklist">
+            <li><strong>A user action</strong> — viewing a page, making a purchase, typing a search query.</li>
+            <li><strong>A machine measurement</strong> — a periodic temperature-sensor reading, a CPU utilization metric.</li>
+            <li><strong>A line in a web server log</strong> — every line of the nginx access log from Chapter 10 is an event.</li>
+          </ul>
+          <p>An event may be encoded as a text string, JSON, or a binary form (Chapter 4), which lets you store it — append it to a file, insert it into a relational table, write it to a document database — or send it over the network to another node for processing. An event is generated once by a <strong>producer</strong> (also known as a publisher or sender) and then potentially processed by multiple <strong>consumers</strong> (subscribers or recipients); related events are usually grouped into a <strong>topic</strong> or stream, the streaming analogue of a filename.</p>
+          <p>In principle, a file or database is enough to connect producers and consumers: the producer writes every event, and each consumer periodically polls for events since it last ran — essentially what a daily batch process does. But moving toward continual processing with low delays, polling becomes expensive: the more often you poll, the lower the percentage of requests that return new events, and the higher the overheads. It is better for consumers to be <em>notified</em> when new events appear. Databases have traditionally supported this badly — relational triggers can react to a change, but they are very limited and something of an afterthought in database design. Instead, specialized tools have been developed for delivering event notifications: messaging systems.</p>
+        </section>
+
+        <!-- ================= 11.1 ================= -->
+        <section class="block reveal" id="s-transmit">
+          <p class="kicker">11.1 <span class="dim">·</span> Moving events around</p>
+          <h2>Transmitting event streams</h2>
+          <p>A direct communication channel like a Unix pipe or TCP connection between producer and consumer would be a simple messaging system, but pipes and TCP connect exactly one sender with one recipient. A proper messaging system allows multiple producer nodes to send messages to the same topic, and multiple consumer nodes to receive messages in a topic. Within this publish/subscribe model, systems take a wide range of approaches, and two questions do most of the separating.</p>
+
+          <h3 id="s-messaging">11.1.1 — Two questions for any messaging system</h3>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>What if producers send faster than consumers can process?</h4><p>Broadly three options: <strong>drop messages</strong>, <strong>buffer them in a queue</strong>, or apply <strong>backpressure</strong> (also known as flow control — blocking the producer from sending more). Unix pipes and TCP use backpressure: a small fixed-size buffer, and if it fills up, the sender is blocked until the recipient takes data out. If messages are buffered, it matters what happens as the queue grows — does the system crash when it no longer fits in memory, does it write to disk, and how does that disk access affect performance?</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>What if nodes crash or go offline — are messages lost?</h4><p>As with databases, durability may require some combination of writing to disk and replication, which has a cost; if you can afford to sometimes lose messages, you can get higher throughput and lower latency on the same hardware. Whether loss is acceptable depends on the application: for periodically transmitted sensor readings and metrics, an occasional missing data point is perhaps not important, since an updated value arrives shortly anyway (though beware: if a large number of messages are dropped, it may not be apparent that the metrics are wrong). If you are counting events, reliable delivery matters more — every lost message means incorrect counters.</p></div></div>
+          </div>
+          <p>One thing to envy about Chapter 10’s batch systems: a strong reliability guarantee — failed tasks automatically retried, partial output of failed tasks automatically discarded, and the output the same <em>as if no failures had occurred</em>. That simplifies the programming model enormously, and the second half of this chapter is about providing the same guarantee in a streaming context.</p>
+
+          <h3 id="s-direct">11.1.2 — Direct messaging, without a middleman</h3>
+          <p>Some messaging systems use direct network communication between producers and consumers, with no intermediary nodes:</p>
+          <ul class="checklist">
+            <li><strong>UDP multicast</strong> — widely used in the financial industry for streams such as stock market feeds, where low latency is important. UDP itself is unreliable, but application-level protocols can recover lost packets (the producer must remember the packets it has sent so it can retransmit them on demand).</li>
+            <li><strong>Brokerless libraries</strong> — ZeroMQ and nanomsg take a similar approach, implementing publish/subscribe messaging over TCP or IP multicast.</li>
+            <li><strong>UDP metrics</strong> — StatsD and Brubeck use unreliable UDP messaging to collect metrics from all machines on a network. In the StatsD protocol, counter metrics are only correct if all messages are received — using UDP makes the metrics at best approximate.</li>
+            <li><strong>Webhooks</strong> — if the consumer exposes a service on the network, producers can make a direct HTTP or RPC request to push messages to it: a callback URL of one service is registered with another, which requests that URL whenever an event occurs.</li>
+          </ul>
+          <p>These work well for what they were designed for, but they generally require the application code to be aware of the possibility of message loss, and the faults they tolerate are limited: even if the protocols detect and retransmit lost packets, they generally assume producers and consumers are constantly online. If a consumer is offline, it misses messages sent while it was unreachable. Some protocols let the producer retry failed deliveries — but that breaks down if the producer crashes, losing the buffer of messages it was supposed to retry.</p>
+
+          <h3 id="s-brokers">11.1.3 — Message brokers</h3>
+          <p>The widely used alternative: send messages via a <strong>message broker</strong> (also known as a message queue), essentially a kind of database optimized for handling message streams. It runs as a server, with producers and consumers connecting as clients: producers write messages to the broker, and consumers receive them by reading from the broker. Centralizing the data in the broker makes it easy to tolerate clients that come and go — connect, disconnect, crash — and the durability question moves to the broker: some brokers keep messages only in memory; others (depending on configuration) write them to disk so they survive a broker crash. Faced with slow consumers, they generally allow unbounded queueing rather than dropping messages or applying backpressure.</p>
+          <p>A consequence of queueing is that consumers are generally <strong>asynchronous</strong>: when a producer sends a message, it normally waits only for the broker to confirm the message is buffered, not for it to be processed by consumers. Delivery happens at some undetermined future point — often within a fraction of a second, sometimes significantly later if there is a queue backlog. Some message brokers can even participate in two-phase commit protocols using XA or JTA (Chapter 9), which makes them quite similar in nature to databases — but important practical differences remain.</p>
+
+          <h3 id="s-brokervsdb">11.1.4 — Message brokers versus databases</h3>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Deletion policy</h4><p>Databases usually keep data until it is explicitly deleted; most message brokers automatically delete a message when it has been successfully delivered. Such brokers are not suitable for long-term data storage.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Working-set assumptions</h4><p>Because they delete messages quickly, most brokers assume their working set is fairly small — the queues are short. If the broker needs to buffer a lot because consumers are slow (perhaps spilling to disk when memory runs out), each message takes longer to process and overall throughput may degrade.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Selection mechanism</h4><p>Databases support secondary indexes and various ways of searching for data; brokers support some way of subscribing to a subset of topics matching some pattern. The mechanisms differ, but both are ways for a client to select the portion of the data it wants to know about.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>Snapshots vs notifications</h4><p>A database query result is based on a point-in-time snapshot — if another client subsequently writes something that changes the result, the first client doesn’t find out unless it repeats the query. Brokers don’t support arbitrary queries, but they do notify clients when data changes — when new messages become available.</p></div></div>
+          </div>
+          <p>This traditional view of message brokers is encapsulated in standards like <strong>JMS</strong> and <strong>AMQP</strong>, and implemented in software like RabbitMQ, ActiveMQ, HornetQ, Qpid, TIBCO Enterprise Message Service, IBM MQ, Azure Service Bus, and Google Cloud Pub/Sub.</p>
+
+          <h3 id="s-consumers">11.1.5 — Multiple consumers: load balancing and fan-out</h3>
+          <p>When multiple consumers read messages in the same topic, two main patterns are used — and they can be combined: two separate groups of consumers each subscribe to a topic, such that each group collectively receives all messages, but within each group only one node receives each message.</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Load balancing <span class="tag">divide the work</span></h4>
+              <p>Each message is delivered to <strong>one</strong> of the consumers, so the consumers share the work of processing the topic; the broker may assign messages arbitrarily. Useful when messages are expensive to process and you want to add consumers to parallelize. In AMQP you get it by having multiple clients consume from the same queue; in JMS it is called a <em>shared subscription</em>.</p>
+            </div>
+            <div class="term">
+              <h4>Fan-out <span class="tag">deliver to all</span></h4>
+              <p>Each message is delivered to <strong>all</strong> consumers, allowing several independent consumers to each “tune in” to the same broadcast without affecting each other — the streaming equivalent of several different batch jobs that read the same input file. JMS provides this via topic subscriptions; AMQP via exchange bindings.</p>
+            </div>
+          </div>
+
+          <h3 id="s-acks">11.1.6 — Acknowledgments and redelivery</h3>
+          <p>Consumers may crash at any time, so a broker might deliver a message that the consumer never processes, or only partially processes before crashing. To ensure the message is not lost, brokers use <strong>acknowledgments</strong>: a client must explicitly tell the broker when it has finished processing a message, so the broker can remove it from the queue. If the connection to a client is closed or times out without an acknowledgment, the broker assumes the message was not processed and delivers it again — to another consumer. (Note that the message might actually have been fully processed with only the ack lost in the network; handling that case properly requires an atomic commit protocol — Chapter 9 again.)</p>
+          <p>Combined with load balancing, redelivery has an interesting effect on <strong>ordering</strong>. Suppose consumer 2 crashes while processing message m3, at the same time as consumer 1 is processing m4. The unacknowledged m3 is redelivered to consumer 1 — which now processes the order m4, m3, m5. Even if the broker otherwise preserves message order (as both the JMS and AMQP standards require), the combination of load balancing with redelivery <em>inevitably</em> reorders messages. To avoid it, use a separate queue per consumer — i.e., don’t use load balancing. Reordering is harmless when messages are completely independent, but it matters greatly when there are causal dependencies between messages, as we shall see.</p>
+
+          <h3 id="s-partlogs">11.1.7 — Partitioned logs: the durable hybrid</h3>
+          <p>Sending a packet over a network is normally a transient operation that leaves no permanent trace. Message brokers inherit that mindset: even those that durably write messages to disk quickly delete them again after delivery. Databases and filesystems take the opposite approach: everything written is expected to be permanently recorded, at least until someone explicitly deletes it. The mindset difference matters for derived data. A key feature of batch processes is that you can run them repeatedly, experimenting, without risk of damaging the read-only input. That is impossible with AMQP/JMS-style messaging: receiving a message is <strong>destructive</strong> if the acknowledgment deletes it from the broker — you cannot run the same consumer twice and get the same result. Add a new consumer to such a system and it typically only sees messages sent after it registered; all prior messages are gone. Why not have a hybrid — the durable storage of databases combined with the low-latency notification of messaging? That is the idea behind <strong>log-based message brokers</strong>.</p>
+          <p>A log is an append-only sequence of records on disk — Chapter 3’s storage engines and Chapter 5’s replication both ran on one. It makes a natural broker: a <strong>producer sends a message by appending it to the end of the log</strong>, and a <strong>consumer receives messages by reading the log sequentially</strong>, waiting at the end for notification of a new append. The Unix tool <code>tail -f</code>, which watches a file for appended data, essentially works like this. To scale beyond a single disk’s throughput, the log can be <strong>partitioned</strong> (in Chapter 6’s sense): partitions hosted on different machines, each a separate log that can be read and written independently, and a <strong>topic</strong> defined as a group of partitions that all carry messages of the same type. Within each partition the broker assigns a monotonically increasing sequence number, or <strong>offset</strong>, to every message. Offsets make sense because a partition is append-only, so messages within a partition are <strong>totally ordered</strong> — but there is no ordering guarantee across different partitions.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 11-3 (recreated) · A partitioned log with consumer groups and offsets</p>
+            <svg viewBox="0 0 780 460" role="img" aria-label="A topic split into three partitions, each an append-only log of numbered offset boxes; consumer group A load-balances by taking one partition per node, while consumer group B independently fans out over the same log — reading is non-destructive, so both groups see everything" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr11a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+                <marker id="arr11b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="10">
+                <text x="390" y="34" text-anchor="middle" fill="#8d97ad">TOPIC — three partitions, each an append-only log with monotonically increasing offsets</text>
+                <rect x="30" y="52" width="720" height="24" rx="6" fill="rgba(240,179,92,0.06)" stroke="#f0b35c" stroke-dasharray="4 3"/>
+                <text x="390" y="68" text-anchor="middle" fill="#f0b35c" font-size="9.5">producers append — the log only ever grows at the tail</text>
+                <rect x="30" y="100" width="220" height="96" rx="10" fill="#151c30" stroke="#2b3859" stroke-width="1.4"/>
+                <text x="140" y="118" text-anchor="middle" fill="#d9e0ee">PARTITION 0</text>
+                <rect x="46" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="59" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">0</text>
+                <rect x="76" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="89" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">1</text>
+                <rect x="106" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="119" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">2</text>
+                <rect x="136" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="149" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">3</text>
+                <rect x="166" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="179" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">4</text>
+                <rect x="196" y="132" width="26" height="22" rx="4" fill="rgba(99,223,194,0.1)" stroke="#63dfc2" stroke-dasharray="3 2"/>
+                <text x="209" y="147" text-anchor="middle" fill="#63dfc2" font-size="9">5</text>
+                <text x="140" y="178" text-anchor="middle" fill="#636d83" font-size="8.5">total order within the partition ·</text>
+                <text x="140" y="190" text-anchor="middle" fill="#636d83" font-size="8.5">consumer offset = position in this row</text>
+                <rect x="280" y="100" width="220" height="96" rx="10" fill="#151c30" stroke="#2b3859" stroke-width="1.4"/>
+                <text x="390" y="118" text-anchor="middle" fill="#d9e0ee">PARTITION 1</text>
+                <rect x="296" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="309" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">0</text>
+                <rect x="326" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="339" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">1</text>
+                <rect x="356" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="369" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">2</text>
+                <rect x="386" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="399" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">3</text>
+                <rect x="416" y="132" width="26" height="22" rx="4" fill="rgba(99,223,194,0.1)" stroke="#63dfc2" stroke-dasharray="3 2"/>
+                <text x="429" y="147" text-anchor="middle" fill="#63dfc2" font-size="9">4</text>
+                <rect x="446" y="132" width="26" height="22" rx="4" fill="rgba(99,223,194,0.1)" stroke="#63dfc2" stroke-dasharray="3 2"/>
+                <text x="459" y="147" text-anchor="middle" fill="#63dfc2" font-size="9">5</text>
+                <text x="390" y="178" text-anchor="middle" fill="#636d83" font-size="8.5">each partition on its own machine —</text>
+                <text x="390" y="190" text-anchor="middle" fill="#636d83" font-size="8.5">independent read/write = horizontal scaling</text>
+                <rect x="530" y="100" width="220" height="96" rx="10" fill="#151c30" stroke="#2b3859" stroke-width="1.4"/>
+                <text x="640" y="118" text-anchor="middle" fill="#d9e0ee">PARTITION 2</text>
+                <rect x="546" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="559" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">0</text>
+                <rect x="576" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="589" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">1</text>
+                <rect x="606" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="619" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">2</text>
+                <rect x="636" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="649" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">3</text>
+                <rect x="666" y="132" width="26" height="22" rx="4" fill="#1a2133" stroke="#2b3859"/>
+                <text x="679" y="147" text-anchor="middle" fill="#8d97ad" font-size="9">4</text>
+                <rect x="696" y="132" width="26" height="22" rx="4" fill="rgba(99,223,194,0.1)" stroke="#63dfc2" stroke-dasharray="3 2"/>
+                <text x="709" y="147" text-anchor="middle" fill="#63dfc2" font-size="9">5</text>
+                <text x="640" y="178" text-anchor="middle" fill="#636d83" font-size="8.5">no ordering guarantee</text>
+                <text x="640" y="190" text-anchor="middle" fill="#636d83" font-size="8.5">across partitions</text>
+                <rect x="60" y="240" width="200" height="70" rx="10" fill="rgba(240,179,92,0.07)" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="160" y="260" text-anchor="middle" fill="#f0b35c">CONSUMER GROUP A</text>
+                <text x="160" y="276" text-anchor="middle" fill="#8d97ad" font-size="9">A1 ← partition 0 · A2 ← p1 · A3 ← p2</text>
+                <text x="160" y="292" text-anchor="middle" fill="#636d83" font-size="8.5">load balancing: # nodes ≤ # partitions</text>
+                <line x1="140" y1="196" x2="140" y2="238" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr11b)"/>
+                <line x1="390" y1="196" x2="240" y2="250" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr11b)"/>
+                <line x1="640" y1="196" x2="264" y2="264" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr11b)"/>
+                <rect x="500" y="240" width="220" height="70" rx="10" fill="rgba(99,223,194,0.07)" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="610" y="260" text-anchor="middle" fill="#63dfc2">CONSUMER GROUP B</text>
+                <text x="610" y="276" text-anchor="middle" fill="#8d97ad" font-size="9">B1 reads ALL partitions — a second full stream</text>
+                <text x="610" y="292" text-anchor="middle" fill="#636d83" font-size="8.5">fan-out: reading is non-destructive</text>
+                <line x1="190" y1="196" x2="530" y2="246" stroke="#63dfc2" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr11a)"/>
+                <line x1="420" y1="196" x2="584" y2="246" stroke="#63dfc2" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr11a)"/>
+                <line x1="640" y1="196" x2="648" y2="238" stroke="#63dfc2" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr11a)"/>
+                <rect x="60" y="360" width="660" height="70" rx="10" fill="#151c30" stroke="#2b3859"/>
+                <text x="390" y="382" text-anchor="middle" fill="#8d97ad">the broker does NOT track per-message acknowledgments —</text>
+                <text x="390" y="398" text-anchor="middle" fill="#d9e0ee">it only periodically records each consumer’s OFFSET (dashed cells above)</text>
+                <text x="390" y="416" text-anchor="middle" fill="#636d83" font-size="9">all offsets &lt; current = processed · all greater = unseen · crash → resume at last recorded offset</text>
+                <text x="390" y="448" text-anchor="middle" fill="#636d83" font-size="9.5">Apache Kafka, Amazon Kinesis Streams, Twitter’s DistributedLog — millions of messages/second via partitioning, fault-tolerant via replication</text>
+              </g>
+            </svg>
+            <p class="fig-caption">The whole log-based model in one picture. Reading a message does <strong>not</strong> delete it, so fan-out is trivial — any number of independent consumer groups — and load balancing is coarse-grained: entire partitions are assigned to nodes in a consumer group. The offset mechanism is the same idea as the log sequence number in single-leader replication: the broker behaves like a leader database, the consumer like a follower reconnecting after a disconnection and resuming without skipping writes. Kafka, Amazon Kinesis Streams, and Twitter’s DistributedLog work this way; Google Cloud Pub/Sub is architecturally similar but exposes a JMS-style API rather than a log abstraction. Even though these brokers write all messages to disk, they achieve <strong>throughput of millions of messages per second</strong> by partitioning across machines, and fault tolerance by replicating messages.</p>
+          </div>
+
+          <h3 id="s-logvstrad">11.1.8 — Log-based brokers versus traditional messaging</h3>
+          <p>The log-based approach trivially supports fan-out, because several consumers can independently read the log without affecting each other — reading doesn’t delete. For load balancing, rather than assigning individual messages to consumer clients, the broker assigns <strong>entire partitions to nodes in the consumer group</strong>, and each node then consumes all messages in its partitions sequentially, in a straightforward single-threaded manner. That coarse-grained balancing has two downsides:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Parallelism ceiling</h4><p>The number of nodes sharing the work of consuming a topic can be at most the number of log partitions in that topic, because messages within the same partition are delivered to the same node. (You can split a partition’s work between two consumers by even/odd offsets, or spread processing over a thread pool — but both complicate offset management; more partitions is the usual answer.)</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Head-of-line blocking</h4><p>A single message that is slow to process holds up the processing of all subsequent messages in that partition — head-of-line blocking, Chapter 1’s acquaintance, in queue clothing.</p></div></div>
+          </div>
+          <p>So the fit is clear: when messages may be expensive to process, you want to parallelize <em>message by message</em>, and ordering is not so important — the <strong>JMS/AMQP style is preferable</strong>. When message throughput is high, each message is fast to process, and message ordering matters — the <strong>log-based approach works very well</strong>.</p>
+
+          <h3 id="s-offsets">11.1.9 — Consumer offsets</h3>
+          <p>Consuming a partition sequentially makes it easy to tell what has been processed: all messages with an offset less than a consumer’s current offset are done; all greater offsets are unseen. The broker therefore doesn’t need to track acknowledgments per message — it only periodically records consumer offsets. The reduced bookkeeping and the opportunities for batching and pipelining help log-based systems reach high throughput. The offset is the close cousin of the <strong>log sequence number</strong> in single-leader database replication: there, it lets a follower reconnect after a disconnection and resume replication without skipping writes — exactly the same principle here. If a consumer node fails, another node in the consumer group takes over its partitions and starts from the last recorded offset. If the failed consumer had processed messages past its recorded offset, <strong>those messages will be processed a second time</strong> on restart. Hold that thought — it becomes the exactly-once problem at the end of this chapter.</p>
+
+          <h3 id="s-diskspace">11.1.10 — Disk space: the log as a big ring buffer</h3>
+          <p>If you only ever append, you eventually run out of disk. The log is divided into <strong>segments</strong>, and from time to time old segments are deleted or moved to archive storage. A consumer that falls so far behind that its offset points into a deleted segment will miss those messages — effectively the log implements a bounded-size buffer that discards old messages when full, also known as a <strong>circular buffer or ring buffer</strong>. But since the buffer is on disk, it can be quite large:</p>
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-value">11 hrs</span>
+              <span class="stat-label">Of buffering on one typical drive</span>
+              <span class="stat-note">a 6 TB hard drive writing at 150 MB/s takes ~11 hours to fill — and the ratio stays the same even across many drives and machines</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value teal">days–weeks</span>
+              <span class="stat-label">Practical retention</span>
+              <span class="stat-note">deployments rarely use full disk write bandwidth, so the log typically keeps several days’ or even weeks’ worth of messages</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">constant</span>
+              <span class="stat-label">Throughput regardless of retention</span>
+              <span class="stat-note">every message is written to disk anyway — unlike memory-first brokers that are fast with short queues and slow down badly when they start spilling to disk</span>
+            </div>
+          </div>
+          <p>Return to the original three choices — drop, buffer, or backpressure: the log-based approach is <strong>buffering with a large but fixed-size buffer</strong>, limited by disk space. A consumer that falls behind past what is retained effectively has old messages dropped — but <em>only that consumer is affected</em>; it does not disrupt the service for other consumers. That is a big operational advantage: you can monitor how far a consumer lags the head of the log and alert, and because the buffer is large, a human operator has time to fix a slow consumer before it starts missing messages. You can even experimentally consume a production log for development, testing, or debugging without much worry about disrupting production — and when a consumer shuts down, the only thing left behind is its offset. Traditional brokers are the opposite: you must carefully delete queues whose consumers have been shut down, or they keep accumulating messages and take memory away from active consumers.</p>
+
+          <h3 id="s-replay">11.1.11 — Replaying old messages</h3>
+          <p>With AMQP/JMS-style brokers, processing and acknowledging messages is destructive — it causes them to be deleted. In a log-based broker, consuming messages is more like reading from a file: a <strong>read-only operation that does not change the log</strong>. The only side effect is the consumer offset moving forward — and the offset is under the consumer’s control, so it can be manipulated: start a copy of a consumer with yesterday’s offsets and write the output to a different location, and you have reprocessed the last day’s worth of messages. Repeat any number of times, varying the processing code.</p>
+          <div class="callout note">
+            <p class="callout-title">Why replay matters</p>
+            <p>This is what makes log-based messaging the streaming sibling of Chapter 10’s batch processes: derived data clearly separated from input data through a <strong>repeatable transformation process</strong>. It allows more experimentation, easier recovery from errors and bugs, and it is a good tool for integrating dataflows within an organization. It is also the foundation Chapter 12 builds its entire finale on.</p>
+          </div>
+        </section>
+        <!-- ================= 11.2 ================= -->
+        <section class="block reveal" id="s-dbstreams">
+          <p class="kicker">11.2 <span class="dim">·</span> The database, turned outward</p>
+          <h2>Databases and streams</h2>
+          <p>We compared brokers and databases and found them less unlike than tradition claims — log-based brokers already took ideas from databases and applied them to messaging. Now go in reverse: take ideas from messaging and streams, and apply them to databases. The bridge is an observation easy to miss: an event is a record of something that happened at some point in time — a user action, a sensor reading, <em>or a write to a database</em>. A write is an event that can be captured, stored, and processed, so the connection between databases and streams runs deeper than the physical storage of logs on disk. A replication log <em>is</em> a stream of database write events, produced by the leader as it processes transactions; followers apply that stream and end up with an accurate copy of the same data. Even the state machine replication principle from Chapter 9 is just another case of event streams: if every event represents a write, and every replica processes the same events in the same order (deterministically), the replicas end up in the same final state.</p>
+
+          <h3 id="s-sync">11.2.1 — Keeping systems in sync</h3>
+          <p>There is no single system that can satisfy all data storage, querying, and processing needs, so most nontrivial applications combine several technologies: an OLTP database to serve user requests, a cache to speed up common requests, a full-text index to handle search queries, a data warehouse for analytics. Each holds its own copy of the data in its own representation, optimized for its own purposes — so the copies must be kept in sync. With data warehouses this is usually ETL — a full copy, transformed, bulk-loaded: a batch process. If periodic full database dumps are too slow, the alternative people reach for is <strong>dual writes</strong>: the application code explicitly writes to each system when data changes — first the database, then the search index, then the cache invalidation (or even concurrently). Dual writes have serious problems, and the first is a race condition.</p>
+
+          <h3 id="s-dualwrites">11.2.2 — The dual-writes race</h3>
+          <p>Two clients concurrently update item X: client 1 wants to set the value to A, client 2 to B. Both write to the database first, then to the search index. With unlucky timing the requests interleave: the database first sees client 1’s write (A), then client 2’s (B) — final database value <strong>B</strong>. The search index first sees client 2’s write, then client 1’s — final index value <strong>A</strong>. The two systems are now <strong>permanently inconsistent with each other, even though no error occurred</strong>.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 11-4 (recreated) · The dual-writes race, on a timeline</p>
+            <svg viewBox="0 0 780 330" role="img" aria-label="Two clients each write value A and value B to the database and the search index; the interleaving differs between the two systems, so the database ends with B while the index ends with A — permanent inconsistency with no error anywhere" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr11c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+                <marker id="arr11d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#ef8080"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="10">
+                <text x="30" y="30" fill="#8d97ad">time →</text>
+                <line x1="30" y1="44" x2="750" y2="44" stroke="#2b3859" stroke-width="1.2" marker-end="url(#arr11c)"/>
+                <rect x="30" y="66" width="130" height="30" rx="8" fill="#1a2133" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="95" y="85" text-anchor="middle" fill="#f0b35c" font-size="9.5">client 1: X := A</text>
+                <rect x="620" y="66" width="130" height="30" rx="8" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="685" y="85" text-anchor="middle" fill="#d9e0ee" font-size="9.5">client 2: X := B</text>
+                <rect x="30" y="140" width="340" height="56" rx="10" fill="#151c30" stroke="#2b3859" stroke-width="1.4"/>
+                <text x="200" y="160" text-anchor="middle" fill="#d9e0ee">DATABASE</text>
+                <text x="200" y="178" text-anchor="middle" fill="#636d83" font-size="9">each system decides its own write order…</text>
+                <rect x="130" y="132" width="86" height="26" rx="6" fill="rgba(240,179,92,0.1)" stroke="#f0b35c"/>
+                <text x="173" y="149" text-anchor="middle" fill="#f0b35c" font-size="9">write A · t1</text>
+                <rect x="230" y="132" width="86" height="26" rx="6" fill="rgba(141,151,173,0.12)" stroke="#8d97ad"/>
+                <text x="273" y="149" text-anchor="middle" fill="#d9e0ee" font-size="9">write B · t2</text>
+                <text x="392" y="172" fill="#ef8080" font-size="10">final: B</text>
+                <line x1="150" y1="96" x2="180" y2="130" stroke="#f0b35c" stroke-width="1.3" marker-end="url(#arr11c)"/>
+                <line x1="650" y1="96" x2="280" y2="130" stroke="#8d97ad" stroke-width="1.3" marker-end="url(#arr11c)"/>
+                <rect x="410" y="140" width="340" height="56" rx="10" fill="#151c30" stroke="#2b3859" stroke-width="1.4"/>
+                <text x="580" y="160" text-anchor="middle" fill="#d9e0ee">SEARCH INDEX</text>
+                <text x="580" y="178" text-anchor="middle" fill="#636d83" font-size="9">…and the two orders disagree</text>
+                <rect x="500" y="132" width="86" height="26" rx="6" fill="rgba(141,151,173,0.12)" stroke="#8d97ad"/>
+                <text x="543" y="149" text-anchor="middle" fill="#d9e0ee" font-size="9">write B · t3</text>
+                <rect x="600" y="132" width="86" height="26" rx="6" fill="rgba(240,179,92,0.1)" stroke="#f0b35c"/>
+                <text x="643" y="149" text-anchor="middle" fill="#f0b35c" font-size="9">write A · t4</text>
+                <line x1="690" y1="96" x2="660" y2="130" stroke="#f0b35c" stroke-width="1.3" marker-end="url(#arr11c)"/>
+                <line x1="140" y1="96" x2="530" y2="130" stroke="#8d97ad" stroke-width="1.3" marker-end="url(#arr11c)"/>
+                <line x1="580" y1="196" x2="580" y2="230" stroke="#ef8080" stroke-width="1.4" marker-end="url(#arr11d)"/>
+                <line x1="200" y1="196" x2="200" y2="230" stroke="#ef8080" stroke-width="1.4" marker-end="url(#arr11d)"/>
+                <rect x="120" y="232" width="540" height="50" rx="10" fill="rgba(239,128,128,0.07)" stroke="#ef8080" stroke-dasharray="5 4"/>
+                <text x="390" y="252" text-anchor="middle" fill="#ef8080">DATABASE SAYS X = B · INDEX SAYS X = A — permanent inconsistency</text>
+                <text x="390" y="270" text-anchor="middle" fill="#8d97ad" font-size="9">no error occurred · without version-vector-style detection, one value silently overwrites the other</text>
+                <text x="390" y="308" text-anchor="middle" fill="#636d83" font-size="9.5">second problem, separate from the race: one write may fail while the other succeeds — making both-or-neither is the atomic commit problem, expensive to solve</text>
+              </g>
+            </svg>
+            <p class="fig-caption">The root cause: <strong>there is no single leader</strong>. The database may have a leader and the index may have a leader, but neither follows the other — so conflicts occur, exactly like multi-leader replication in Chapter 5, just one level up. And unless you have an additional concurrency-detection mechanism like the version vectors of Chapter 5, you will not even notice the concurrent writes: one value simply, silently overwrites the other. The situation would be better if there really were only one leader — the database — and if the search index could be made a <em>follower</em> of the database. That is precisely what change data capture arranges.</p>
+          </div>
+
+          <h3 id="s-cdc">11.2.3 — Change data capture</h3>
+          <p>The problem with most databases’ replication logs is that they have long been considered an internal implementation detail, not a public API — clients are supposed to query through the data model and query language, not parse replication logs. For decades many databases had no documented way of getting the log of changes written to them, making it hard to replicate changes to a different storage technology. Hence the growing interest in <strong>change data capture (CDC)</strong>: the process of observing all data changes written to a database and extracting them in a form in which they can be replicated to other systems. CDC is especially interesting when changes are made available as a stream, immediately as they are written.</p>
+          <p>Capture the changes and continually apply them — in the same order — to a search index, and the index’s data will match the database’s. The search index and any other derived data systems are just <strong>consumers of the change stream</strong>: the data in the index and the warehouse is another view onto the data in the system of record. Essentially, CDC makes one database the <strong>leader</strong> (the one changes are captured from) and turns the others into <strong>followers</strong> — the fix the dual-writes race wanted. A log-based message broker is well suited to transporting the change events, because it preserves message ordering, avoiding the redelivery-reordering issue.</p>
+
+          <h3 id="s-cdcimpl">11.2.4 — Implementing CDC: triggers or the replication log?</h3>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Triggers <span class="tag">flexible, fragile</span></h4>
+              <p>Register triggers that observe all changes to data tables and add corresponding entries to a changelog table (trigger-based replication, Chapter 5). You decide exactly what gets logged. But triggers tend to be fragile, and they have significant performance overheads.</p>
+            </div>
+            <div class="term">
+              <h4>Replication log <span class="tag">robust, low-level</span></h4>
+              <p>Parse the database’s own replication log. More robust, and the order of writes extracted from the database matches the order in which they were actually written — which is precisely what kills the dual-writes race. The challenges are mechanical: handling schema changes, for instance. And the application writing to the database does not need to be aware that CDC is occurring.</p>
+            </div>
+          </div>
+          <p>Real deployments, at large scale: LinkedIn’s <strong>Databus</strong>, Facebook’s <strong>Wormhole</strong>, Yahoo!’s <strong>Sherpa</strong>. Tooling by database: <strong>Bottled Water</strong> implements CDC for PostgreSQL using an API that decodes the write-ahead log; <strong>Maxwell</strong> and <strong>Debezium</strong> do something similar for MySQL by parsing the binlog; <strong>Mongoriver</strong> reads the MongoDB oplog; <strong>GoldenGate</strong> provides similar facilities for Oracle. Like message brokers, CDC is usually <strong>asynchronous</strong>: the system of record does not wait for the change to be applied to consumers before committing. Operationally nice — adding a slow consumer does not affect the source database too much — but it means all the issues of replication lag from Chapter 5 apply to your derived systems.</p>
+
+          <h3 id="s-snapshot">11.2.5 — The initial snapshot</h3>
+          <p>If you had the log of all changes ever made, you could reconstruct the entire state by replaying it. But keeping all changes forever takes too much disk space and replaying takes too long, so the log needs to be truncated — and building a new full-text index, for example, requires a full copy of the entire database: a log of recent changes alone would miss items that were not recently updated. Without the entire history, you need to start from a <strong>consistent snapshot</strong>, the same problem as setting up a new follower in Chapter 5. The snapshot must correspond to a <strong>known position or offset in the change log</strong>, so you know exactly where to start applying changes after processing it. Some CDC tools integrate this snapshot facility; others leave it as a manual operation.</p>
+
+          <h3 id="s-compaction">11.2.6 — Log compaction</h3>
+          <p>If you can only keep limited log history, you need the snapshot process every time you add a new derived data system. <strong>Log compaction</strong> is the better alternative. We met it in Chapter 3’s hash indexes: the storage engine periodically looks for log records with the same key, throws away duplicates, and keeps only the most recent value. An update with a special null value — a <strong>tombstone</strong> — indicates a key was deleted and causes it to be removed during compaction. As long as a key is not overwritten or deleted, it stays in the log forever, and the disk space of the compacted log depends only on the <strong>current contents of the database</strong>, not the number of writes that have ever occurred.</p>
+          <p>Now apply it to CDC: if every change has a primary key and every update for a key replaces the previous value, it is sufficient to keep just the most recent write for each key. Whenever you want to rebuild a derived system — say, a search index — start a new consumer at <strong>offset 0 of the log-compacted topic</strong> and sequentially scan all messages: the log is guaranteed to contain the most recent value for every key in the database (and maybe some older values). A full copy of the database contents, no snapshot needed. Kafka supports log compaction for exactly this purpose — it allows the message broker to be used for <strong>durable storage, not just transient messaging</strong>.</p>
+
+          <h3 id="s-changestreams">11.2.7 — API support for change streams</h3>
+          <p>Databases are increasingly supporting change streams as a first-class interface rather than the retrofitted, reverse-engineered CDC efforts: <strong>RethinkDB</strong> allows queries to subscribe to notifications when the results change; <strong>Firebase</strong> and <strong>CouchDB</strong> provide data synchronization based on a change feed that is also made available to applications; <strong>Meteor</strong> uses the MongoDB oplog to subscribe to data changes and update the user interface. <strong>VoltDB</strong> allows transactions to continuously export data as a stream: the database represents an output stream in the relational model as a table that transactions can insert tuples into but that cannot be queried — the stream consists of the log of tuples committed transactions wrote to this special table, in commit order, and external consumers can use it to update derived data systems. And <strong>Kafka Connect</strong> integrates change data capture tools for a wide range of databases with Kafka, so the change events can feed derived systems and stream processors alike.</p>
+
+          <h3 id="s-eventsourcing">11.2.8 — Event sourcing</h3>
+          <p>There are strong parallels between all this and <strong>event sourcing</strong>, a technique developed in the domain-driven design (DDD) community. Event sourcing also involves storing all changes to application state as a log of change events — the biggest difference is the <strong>level of abstraction</strong>:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>CDC — mutable database, low-level log</h4><p>The application uses the database in a mutable way, updating and deleting records at will. The log of changes is extracted at a low level (parsing the replication log), which ensures the extracted write order matches the actual write order — avoiding Figure 11-4’s race. The application writing to the database does not need to know CDC is occurring.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Event sourcing — immutable events, application level</h4><p>The application logic is explicitly built on immutable events written to an event log. The event store is append-only; updates and deletes are discouraged or prohibited. Events reflect things that happened at the <em>application</em> level, rather than low-level state changes.</p></div></div>
+          </div>
+          <p>Why it is a powerful technique for data modeling: from an application’s point of view it is more meaningful to record the user’s actions as immutable events than to record the effects of those actions on a mutable database. Storing “student cancelled their course enrollment” expresses the intent of a single action neutrally; the side-effect phrasing — “one entry was deleted from the enrollments table, and one cancellation reason was added to the student feedback table” — embeds assumptions about how the data will later be used. If a new feature arrives (“the place is offered to the next person on the waiting list”), event sourcing lets the new side effect chain off the existing event. It makes applications easier to evolve, helps debugging by making it easier to understand after the fact <em>why</em> something happened, and guards against application bugs. Event sourcing is similar to the chronicle data model, and an event log has similarities to the fact table of a star schema (Chapter 3). Specialized databases like <strong>Event Store</strong> exist, but the approach is independent of any particular tool — a conventional database or a log-based message broker works too.</p>
+
+          <h3 id="s-deriving">11.2.9 — Deriving current state from the event log</h3>
+          <p>An event log by itself is not very useful: users generally expect to see the current state of a system, not its history of modifications — the current contents of their cart, not an append-only list of every change they ever made to it. Applications using event sourcing must transform the log (the way data is <em>written</em>) into application state suitable for showing to a user (the way data is <em>read</em>). The transformation can use arbitrary logic, but it should be <strong>deterministic</strong>, so running it again derives the same state from the same log. Like CDC, replaying the log reconstructs current state — but log compaction must be handled differently:</p>
+          <ul class="checklist">
+            <li><strong>CDC:</strong> an update event typically contains the entire new version of the record, so the current value for a primary key is entirely determined by the most recent event for that key — log compaction can discard previous events for the same key.</li>
+            <li><strong>Event sourcing:</strong> events are modeled at a higher level, expressing the intent of a user action rather than the mechanics of the state update. Later events typically do not override prior ones, so you need the <strong>full history of events</strong> to reconstruct the final state — compaction is not possible in the same way.</li>
+          </ul>
+          <p>Event-sourced applications typically have some mechanism for storing <strong>snapshots of the current state</strong> derived from the log, so they don’t repeatedly reprocess everything — but that is only a performance optimization, to speed up reads and recovery from crashes. The intention is that the system can store all raw events forever and reprocess the full event log whenever required.</p>
+
+          <h3 id="s-commands">11.2.10 — Commands versus events</h3>
+          <p>Event sourcing carefully distinguishes <strong>events</strong> from <strong>commands</strong>. When a request from a user first arrives, it is initially a <em>command</em>: at this point it may still fail, for example because some integrity condition is violated. The application must first validate that it can execute the command — the username is not already taken, the seat is not already booked. If validation succeeds and the command is accepted, <strong>it becomes an event</strong>: durable and immutable.</p>
+          <p>At the point the event is generated, it becomes a <strong>fact</strong>. Even if the customer later changes or cancels the reservation, the fact remains true that they <em>formerly held</em> a reservation for that seat — the change or cancellation is a separate event added later. This has a hard architectural consequence: <strong>a consumer of the event stream is not allowed to reject an event</strong> — by the time the consumer sees it, it is already an immutable part of the log, and it may already have been seen by other consumers. Any validation must therefore happen synchronously, before the event exists — for example via a serializable transaction that atomically validates the command and publishes the event. Alternatively, split the request into two events — a tentative reservation, then a separate confirmation once validated — which allows the validation to take place asynchronously.</p>
+
+          <h3 id="s-immutability">11.2.11 — State, streams, and immutability</h3>
+          <p>Chapter 10 benefited from the immutability of input files; the same principle is what makes event sourcing and CDC so powerful. We normally think of databases as storing current state — optimized for reads, the most convenient representation for serving queries. The nature of state is that it changes, which is why databases support updating and deleting. But here is the reframe: <strong>whenever you have state that changes, that state is the result of the events that mutated it over time</strong>. Your list of available seats is the result of the reservations processed; the current account balance is the result of the credits and debits; the response-time graph is an aggregation of the response times of all requests that occurred. Even as things are done and undone, the fact remains true that those events occurred. Mutable state and an append-only log of immutable events do not contradict each other — <strong>they are two sides of the same coin</strong>. The changelog represents the evolution of state over time.</p>
+          <p>If you are mathematically inclined: <strong>application state is what you get when you integrate an event stream over time, and a change stream is what you get when you differentiate the state by time</strong>. The analogy has limits (the second derivative of state does not seem meaningful), but it is a useful starting point. Store the changelog durably and the state becomes reproducible; treat the log as the system of record and all mutable state as derived from it, and dataflow through a system becomes much easier to reason about:</p>
+          <div class="callout story">
+            <p class="callout-title">“The truth is the log”</p>
+            <p>“Transaction logs record all the changes made to the database. High-speed appends are the only way to change the log. From this perspective, the contents of the database hold a caching of the latest record values in the logs. <strong>The truth is the log. The database is a cache of a subset of the log.</strong> That cached subset happens to be the latest value of each record and index value from the log.” — Pat Helland. Log compaction is one way of bridging the distinction between log and database state: it retains only the latest version of each record and discards overwritten versions.</p>
+          </div>
+          <p>Why is immutability worth this trouble? Accountants have used it for centuries: when a transaction occurs, it is recorded in an append-only <strong>ledger</strong> — essentially a log of events describing money, goods, or services that changed hands — and the accounts (profit and loss, the balance sheet) are derived by adding up the ledger. If a mistake is made, accountants don’t erase or change the incorrect entry; they add a <strong>compensating transaction</strong>, and the incorrect entry remains forever for auditing; if wrong figures were published, the next accounting period includes a correction. Entirely normal in accounting — and beneficial well beyond finance: if you accidentally deploy buggy code that writes bad data, recovery is much harder when the code can destructively overwrite good data; with an append-only log of immutable events, diagnosing and recovering is far easier. Immutable events also capture <strong>more information than current state</strong>: the customer who added an item to their cart and then removed it — for order fulfillment the events cancel out, but for analytics, knowing they considered the item and decided against it is real signal, which a database that deletes on removal would have lost.</p>
+
+          <h3 id="s-cqrs">11.2.12 — Several views from one log: CQRS</h3>
+          <p>Separating mutable state from the immutable event log lets you derive <strong>several different read-oriented representations from the same log</strong> — multiple stream consumers again: the analytic database <strong>Druid</strong> ingests directly from Kafka this way; <strong>Pistachio</strong> is a distributed key-value store that uses Kafka as a commit log; Kafka Connect sinks export from Kafka to various databases and indexes. An explicit translation step from event log to database also makes applications easier to evolve: a new feature presenting existing data in a new way is just a new read-optimized view built from the log and run <em>alongside</em> the old systems — no complicated schema migration in a live system. Once the old view is no longer needed, shut it down and reclaim its resources.</p>
+          <p>Storing data is straightforward if you don’t have to worry about how it will be queried; many of the complexities of schema design, indexing, and storage engines exist to serve particular access patterns. So you gain flexibility by separating the form in which data is written from the form in which it is read, and by allowing several read views — an idea known as <strong>command query responsibility segregation (CQRS)</strong>. It dissolves the classic normalization debates: it is entirely reasonable to <em>denormalize</em> data in read-optimized views, because the translation process is the mechanism keeping them consistent with the event log. Twitter’s home timelines from Chapter 1 are exactly this: highly denormalized read-optimized state — your tweets duplicated into all your followers’ timelines — kept manageable because the fan-out service continuously syncs the duplicated state with new tweets and new following relationships.</p>
+
+          <h3 id="s-concurrency">11.2.13 — Concurrency control</h3>
+          <p>The biggest downside of event sourcing and CDC is that consumers of the event log are usually <strong>asynchronous</strong>: a user may write to the log, then read from a log-derived view and find the write not yet reflected — the read-your-own-writes problem from Chapter 5, back again. One solution: update the read view synchronously with appending the event, which requires a transaction to combine the writes atomically — so either the event log and read view live in the same storage system, or you need a distributed transaction across them. The Chapter 9 approach of implementing linearizable storage via total order broadcast is another route.</p>
+          <p>But deriving current state from an event log also <em>simplifies</em> parts of concurrency control. Much of the need for multi-object transactions (Chapter 7) stems from a single user action requiring data changes in several different places. With event sourcing, you can design the event as a self-contained description of the user action, so the action requires only a <strong>single write — appending the event to the log — which is easy to make atomic</strong>. Better: if the event log and the application state are partitioned the same way (an event for a customer in partition 3 only requires updating partition 3 of the state), then a straightforward single-threaded log consumer needs <strong>no concurrency control for writes at all</strong> — by construction it only processes one event at a time, like Chapter 7’s actual serial execution. The log removes the nondeterminism of concurrency by defining a serial order of events in a partition. Events touching multiple state partitions require more work — which is Chapter 12’s territory.</p>
+
+          <h3 id="s-immlimits">11.2.14 — The limits of immutability</h3>
+          <p>Many systems that don’t use event sourcing still rely on immutability: databases internally use immutable data structures or multi-version data to support point-in-time snapshots; version control systems like Git, Mercurial, and Fossil preserve immutable file history. To what extent is it feasible to keep an immutable history of all changes forever? It depends on <strong>churn</strong>. Workloads that mostly add data and rarely update or delete are easy to make immutable. Workloads with high rates of updates and deletes on a comparatively small dataset make the immutable history grow prohibitively large; fragmentation becomes an issue, and the performance of compaction and garbage collection becomes crucial for operational robustness.</p>
+          <p>And beyond performance, there are circumstances where data must be deleted for administrative reasons — privacy regulations may require deleting a user’s personal information after they close their account; data protection legislation may require erroneous information removed; a leak of sensitive information may need containing. In those cases it is not enough to append an event saying “consider this deleted” — you actually want to <strong>rewrite history</strong> as if the data had never been written. Datomic calls this feature <strong>excision</strong>; the Fossil version control system has a similar concept called <strong>shunning</strong>. Truly deleting data is surprisingly hard, since copies can live in many places: storage engines, filesystems, and SSDs often write to new locations rather than overwriting in place, and backups are often deliberately immutable. Deletion is more a matter of “making it harder to retrieve the data” than “making it impossible.” Nevertheless, sometimes you have to try — Chapter 12 returns to this with the ethics of retention.</p>
+        </section>
+        <!-- ================= 11.3 ================= -->
+        <section class="block reveal" id="s-processing">
+          <p class="kicker">11.3 <span class="dim">·</span> The operators</p>
+          <h2>Processing streams</h2>
+          <p>We know where streams come from (user activity events, sensors, writes to databases) and how they travel (direct messaging, brokers, event logs). What remains is what you do with one. Broadly, three options:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Write it to a storage system</h4><p>Database, cache, or search index, from where other clients can query it — the streaming equivalent of Chapter 10’s batch outputs, and a good way to keep the store in sync with the rest of the system, especially if the stream consumer is the only client writing to it.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Push it to people</h4><p>Email alerts, push notifications, streaming events into a real-time dashboard where they are visualized. A human is the ultimate consumer of the stream.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Produce derived streams</h4><p>Process one or more input streams to produce one or more output streams, possibly through a pipeline of several processing stages before ending at option 1 or 2. A piece of code that does this is an <strong>operator</strong> or a <strong>job</strong> — closely related to the Unix processes and MapReduce jobs of Chapter 10, with the same dataflow shape: consume input read-only, write output append-only somewhere else.</p></div></div>
+          </div>
+          <p>The rest of this chapter is about option 3. Partitioning and parallelization work like MapReduce and the dataflow engines, and basic mapping operations (transform, filter) are the same. The one crucial difference: <strong>a stream never ends</strong>. That changes everything about the hard parts — sorting does not make sense with an unbounded dataset, so <strong>sort-merge joins cannot be used</strong> (the very last record might need to join the very first). And fault tolerance must change: a batch task that ran for a few minutes can restart from the beginning, but a stream job that has been running for several years cannot restart from the beginning after a crash.</p>
+
+          <h3 id="s-uses">11.3.1 — Uses of stream processing</h3>
+          <p>Stream processing has long been used for monitoring — an organization wants alerts when certain things happen: fraud detection systems looking for unexpectedly changed credit-card usage patterns; trading systems examining price changes and executing trades by specified rules; manufacturing systems monitoring factory machines; military and intelligence systems tracking potential aggressors. These require quite sophisticated pattern matching, and the first two styles below grew out of that lineage.</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Complex event processing <span class="tag">CEP</span></h4>
+              <p>An approach developed in the 1990s for analyzing event streams, geared toward searching for certain <em>event patterns</em>. Like a regular expression searches for character patterns in a string, CEP lets you specify rules to search for patterns of events in a stream — usually in a high-level declarative query language like SQL or a graphical UI. The queries are submitted to a processing engine that consumes the input streams and internally maintains a <strong>state machine</strong> performing the matching; when a match is found, it emits a <em>complex event</em> (hence the name) with the details of the detected pattern. Note the reversal from databases: <strong>the queries are stored long-term, and the events flow past them</strong> — a database stores data and treats queries as transient; CEP engines store queries and treat the data as transient. Implementations: Esper, IBM InfoSphere Streams, Apama, TIBCO StreamBase, SQLstream; Samza has been gaining SQL support too.</p>
+            </div>
+            <div class="term">
+              <h4>Stream analytics <span class="tag">aggregations</span></h4>
+              <p>Less interested in specific event sequences, more in aggregations and statistical metrics over large numbers of events: the rate of some event type (how often it occurs per interval), the rolling average of a value over a period, comparisons of current statistics to previous intervals (trends, alerts on metrics unusually high or low versus the same time last week). Such statistics are usually computed over fixed time intervals — a <strong>window</strong>. Stream analytics systems sometimes use probabilistic algorithms — Bloom filters for set membership, HyperLogLog for cardinality estimation, percentile-estimation algorithms — which produce approximate results with much less memory. This sometimes leads people to believe stream processing is inherently lossy and inexact, but that is wrong: <strong>there is nothing inherently approximate about stream processing; probabilistic algorithms are merely an optimization</strong>. Frameworks: Storm, Spark Streaming, Flink, Concord, Samza, Kafka Streams; hosted: Google Cloud Dataflow, Azure Stream Analytics.</p>
+            </div>
+            <div class="term">
+              <h4>Maintaining materialized views <span class="tag">derived state</span></h4>
+              <p>Keeping derived data systems — caches, search indexes, warehouses — up to date with a source database is a specific case of maintaining <strong>materialized views</strong>: deriving an alternative view onto a dataset so it can be queried efficiently, updated whenever the underlying data changes. Event-sourced application state is also a materialized view. Unlike analytics, this usually requires all events over an arbitrary time period — a <strong>window that stretches all the way back to the beginning of time</strong> — which runs counter to analytics frameworks that mostly operate on limited windows. Samza and Kafka Streams support it, building on Kafka’s log compaction.</p>
+            </div>
+            <div class="term">
+              <h4>Search on streams <span class="tag">percolator</span></h4>
+              <p>CEP searches for multi-event patterns; there is also sometimes a need to search for individual events by complex criteria, like full-text queries — media monitoring services subscribe to news feeds and search for mentions of companies or products; real-estate sites notify users when a new property matching their criteria appears. The <strong>percolator</strong> feature of Elasticsearch is one option. Conventional search indexes documents first and runs queries over the index; searching a stream turns it on its head — <strong>the queries are stored, and the documents run past the queries</strong>, like CEP. In the simplest case you test every document against every query; to optimize, you can index the queries as well as the documents.</p>
+            </div>
+          </div>
+          <div class="callout note">
+            <p class="callout-title">Actors are not stream processors (but they rhyme)</p>
+            <p>Message-passing systems like the actor model (Chapter 4) are also built on messages and events, but three differences matter: actor frameworks are primarily a mechanism for <strong>managing concurrency</strong> and distributed execution of communicating modules, while stream processing is primarily a <strong>data management</strong> technique; communication between actors is often ephemeral and one-to-one, whereas event logs are durable and multi-subscriber; and actors communicate in arbitrary ways, including cyclic request/response patterns, while stream processors form acyclic pipelines where every stream is the output of one job derived from well-defined inputs. There is crossover: Apache Storm’s <em>distributed RPC</em> farms user queries out to nodes that also process event streams and interleaves them; and you can process streams with actor frameworks, though many don’t guarantee delivery across crashes, so processing isn’t fault-tolerant without extra retry logic.</p>
+          </div>
+
+          <h3 id="s-time">11.3.2 — Reasoning about time</h3>
+          <p>Stream processors often need to deal with time — “the average over the last five minutes” sounds unambiguous and is surprisingly tricky. In a batch process, the tasks crunch through a large collection of historical events, and any breakdown by time must use <strong>the timestamp embedded in each event</strong>; the system clock of the machine running the batch is irrelevant, and using event timestamps keeps the processing deterministic — run it again and get the same result. Many stream processing frameworks, however, use the local system clock of the processing machine (the <strong>processing time</strong>) to determine windowing. That is simple, and reasonable if the delay between event creation and event processing is negligibly short. It breaks down if there is any significant processing lag.</p>
+          <h4>Event time versus processing time</h4>
+          <p>Processing may be delayed for many reasons: queueing, network faults, contention in the broker or processor, a restart of the stream consumer, or reprocessing of past events while recovering from a fault or fixing a bug. Message delays also lead to unpredictable <em>ordering</em>: a user makes one web request handled by server A, then a second handled by server B; both emit events, but B’s reaches the broker first — the stream processor sees B’s event before A’s, though they occurred in the opposite order.</p>
+          <div class="callout story">
+            <p class="callout-title">The Star Wars analogy</p>
+            <p>Episode IV was released in 1977, V in 1980, VI in 1983, then Episodes I, II, III in 1999, 2002, 2005, and VII in 2015. If you watched the movies in release order, the order in which you <em>processed</em> them is inconsistent with the order of their <em>narrative</em>. The episode number is like the event timestamp; the date you watched it is the processing time. Humans cope with such discontinuities, but stream processing algorithms must be specifically written to accommodate them.</p>
+          </div>
+          <p>Confusing event time with processing time produces <strong>bad data</strong>. Suppose a stream processor measures the rate of requests — count per second. If you redeploy the processor, it may be down for a minute and then process the backlog on restart. Measured by processing time, it will look like a sudden anomalous spike of requests while chewing the backlog, when in fact the real request rate was steady. Windowing by processing time introduces artifacts due to variations in processing rate.</p>
+
+          <h3 id="s-stragglers">11.3.3 — Knowing when you’re ready (stragglers)</h3>
+          <p>Defining windows by event time creates a tricky problem: <strong>you can never be sure you have received all the events for a particular window</strong>. Grouping into one-minute windows, you have counted events in the 37th minute; time has moved on, and incoming events now fall in the 38th and 39th minutes. When do you declare the 37th-minute window finished and output its counter? You can time out and declare it ready after seeing no new events for a while — but an event may still have been buffered on another machine, delayed by a network interruption. You need to handle such <strong>straggler events</strong> that arrive after the window was declared complete. Broadly, two options:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Ignore the stragglers</h4><p>They are probably a small percentage of events in normal circumstances. Track the number of dropped events as a metric, and alert if you start dropping a significant amount of data.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Publish a correction</h4><p>An updated value for the window with the straggler included — you may also need to <strong>retract</strong> the previous output.</p></div></div>
+          </div>
+          <p>In some cases a special message can declare “from now on there will be no more messages with a timestamp earlier than t,” which consumers can use to trigger windows — though with several producers on different machines, each with its own minimum-timestamp threshold, consumers must track each producer individually, and adding or removing producers gets trickier. (Modern systems call such markers <em>watermarks</em>, but the underlying bet is the same: a guess that late events are rare.)</p>
+
+          <h3 id="s-clocks">11.3.4 — Whose clock are you using, anyway?</h3>
+          <p>Timestamping is even harder when events can be buffered at several points in the system. A mobile app reporting usage metrics may be used while the device is offline, buffering events locally and sending them hours or even days later when a connection returns — to consumers, they appear as extremely delayed stragglers. The timestamp should really be the time the user interaction occurred, according to the device’s clock — but a user-controlled device’s clock often cannot be trusted, being accidentally or deliberately wrong (Chapter 8). The server-received time is more accurate but less meaningful. One adjustment approach logs <strong>three timestamps</strong>:</p>
+          <ul class="checklist">
+            <li><strong>Event occurred</strong> — according to the device clock.</li>
+            <li><strong>Event sent to the server</strong> — according to the device clock.</li>
+            <li><strong>Event received by the server</strong> — according to the server clock.</li>
+          </ul>
+          <p>Subtracting the second from the third estimates the <strong>offset between device and server clocks</strong> (assuming network delay is negligible compared to the required accuracy); applying that offset to the event timestamp estimates when the event actually occurred (assuming the offset didn’t change between occurrence and sending). This problem isn’t unique to streaming — batch processing suffers exactly the same issues; it is just more noticeable in a streaming context, where we are more aware of the passage of time.</p>
+
+          <h3 id="s-windows">11.3.5 — Types of windows</h3>
+          <p>Once you know how an event’s timestamp is determined, the next step is deciding how windows over time periods are defined, for aggregations — counting events, averaging values. Four types are in common use:</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 11-A (recreated) · Tumbling, hopping, sliding, and session windows on one timeline</p>
+            <svg viewBox="0 0 780 380" role="img" aria-label="Four window types over the same event stream: tumbling windows are fixed and non-overlapping; hopping windows have fixed length but advance by a step; sliding windows group events within an interval of each other with no fixed boundaries; session windows grow around bursts of activity and end after an inactivity gap" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr11e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#8d97ad"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="9.5">
+                <text x="30" y="26" fill="#f0b35c">TUMBLING — fixed length, no overlap; every event in exactly one</text>
+                <rect x="80" y="38" width="90" height="26" rx="5" fill="rgba(240,179,92,0.12)" stroke="#f0b35c"/>
+                <rect x="170" y="38" width="90" height="26" rx="5" fill="rgba(240,179,92,0.12)" stroke="#f0b35c"/>
+                <rect x="260" y="38" width="90" height="26" rx="5" fill="rgba(240,179,92,0.12)" stroke="#f0b35c"/>
+                <rect x="350" y="38" width="90" height="26" rx="5" fill="rgba(240,179,92,0.12)" stroke="#f0b35c"/>
+                <text x="460" y="55" fill="#636d83" font-size="9">10:03:00–10:03:59 · 10:04:00–10:04:59 · …</text>
+                <text x="30" y="96" fill="#63dfc2">HOPPING — fixed length, slides by a step; overlap smooths</text>
+                <rect x="80" y="108" width="120" height="26" rx="5" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+                <rect x="104" y="140" width="120" height="20" rx="5" fill="rgba(99,223,194,0.07)" stroke="#63dfc2" stroke-dasharray="3 2"/>
+                <rect x="128" y="166" width="120" height="20" rx="5" fill="rgba(99,223,194,0.07)" stroke="#63dfc2" stroke-dasharray="3 2"/>
+                <rect x="152" y="192" width="120" height="20" rx="5" fill="rgba(99,223,194,0.07)" stroke="#63dfc2" stroke-dasharray="3 2"/>
+                <text x="290" y="130" fill="#636d83" font-size="9">5-min window, hop 1 min: 10:03–10:07:59, 10:04–10:08:59…</text>
+                <text x="290" y="146" fill="#636d83" font-size="9">= aggregate several adjacent 1-min tumbling windows</text>
+                <text x="30" y="240" fill="#d9e0ee">SLIDING — all events within some interval of each other</text>
+                <rect x="96" y="252" width="204" height="26" rx="13" fill="rgba(141,151,173,0.14)" stroke="#8d97ad"/>
+                <line x1="30" y1="300" x2="740" y2="300" stroke="#2b3859" stroke-width="1.2" marker-end="url(#arr11e)"/>
+                <circle cx="140" cy="300" r="5" fill="#f0b35c"/>
+                <circle cx="250" cy="300" r="5" fill="#f0b35c"/>
+                <circle cx="292" cy="300" r="5" fill="#f0b35c"/>
+                <circle cx="480" cy="300" r="5" fill="#f0b35c"/>
+                <circle cx="520" cy="300" r="5" fill="#f0b35c"/>
+                <circle cx="640" cy="300" r="5" fill="#f0b35c"/>
+                <text x="290" y="264" fill="#636d83" font-size="9">10:03:39 and 10:08:12 land together — &lt; 5 min apart, no fixed boundary</text>
+                <text x="330" y="284" fill="#636d83" font-size="9">implement: buffer of events sorted by time, expire old ones</text>
+                <text x="30" y="340" fill="#ef8080">SESSION — no fixed duration; gap of inactivity ends it</text>
+                <rect x="120" y="352" width="180" height="20" rx="10" fill="rgba(239,128,128,0.1)" stroke="#ef8080"/>
+                <rect x="460" y="352" width="210" height="20" rx="10" fill="rgba(239,128,128,0.1)" stroke="#ef8080"/>
+                <text x="620" y="366" fill="#636d83" font-size="9" text-anchor="end">e.g. gap = 30 min</text>
+              </g>
+            </svg>
+            <p class="fig-caption">One timeline, four ways to slice it. A <strong>tumbling window</strong> has fixed length and every event belongs to exactly one — a 1-minute tumbling window is just each timestamp rounded down to the nearest minute. A <strong>hopping window</strong> has fixed length but allows overlap for smoothing — a 5-minute window with a hop of 1 minute contains 10:03:00–10:07:59, then 10:04:00–10:08:59, and so on; implement it by calculating 1-minute tumbling windows and aggregating over several adjacent ones. A <strong>sliding window</strong> contains all events that occur within some interval of each other — 10:03:39 and 10:08:12 share a 5-minute sliding window even though fixed-boundary windows would separate them; implement with a buffer of events sorted by time, removing old events as they expire. A <strong>session window</strong> has no fixed duration: group together all events for the same user that occur closely in time, and the window ends after inactivity — say 30 minutes. Sessionization is a common website-analytics requirement, Chapter 10’s friend.</p>
+          </div>
+
+          <h3 id="s-joins">11.3.6 — Stream joins</h3>
+          <p>Batch jobs join datasets by key; since stream processing generalizes data pipelines to unbounded datasets, there is exactly the same need for joins. But new events can appear at any time, which makes stream joins harder. Three types to distinguish:</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 11-B (recreated) · The three stream joins</p>
+            <svg viewBox="0 0 780 500" role="img" aria-label="Top: a stream-stream join buffers search events and click events indexed by session ID, emitting a match when both halves arrive within the window. Middle: a stream-table join enriches an activity stream against a local replica of a profile database kept current via its changelog. Bottom: a table-table join consumes two changelogs and maintains a materialized view of the join" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr11f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+                <marker id="arr11g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="9.5">
+                <text x="30" y="26" fill="#f0b35c">STREAM-STREAM (window join) — e.g. search events ⋈ click events, within 1 hour</text>
+                <rect x="30" y="40" width="180" height="30" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="120" y="59" text-anchor="middle" fill="#d9e0ee" font-size="9">search events (sID, URL)</text>
+                <rect x="30" y="80" width="180" height="30" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="120" y="99" text-anchor="middle" fill="#d9e0ee" font-size="9">click events (sID, URL)</text>
+                <rect x="280" y="46" width="200" height="58" rx="10" fill="rgba(240,179,92,0.07)" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="380" y="66" text-anchor="middle" fill="#f0b35c" font-size="9.5">join operator STATE</text>
+                <text x="380" y="82" text-anchor="middle" fill="#8d97ad" font-size="9">last hour of events,</text>
+                <text x="380" y="95" text-anchor="middle" fill="#8d97ad" font-size="9">indexed by session ID</text>
+                <line x1="210" y1="55" x2="278" y2="62" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr11g)"/>
+                <line x1="210" y1="95" x2="278" y2="88" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr11g)"/>
+                <rect x="540" y="46" width="200" height="58" rx="10" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="640" y="66" text-anchor="middle" fill="#63dfc2" font-size="9.5">output: clicked / not-clicked</text>
+                <text x="640" y="82" text-anchor="middle" fill="#636d83" font-size="9">match → “result was clicked”</text>
+                <text x="640" y="95" text-anchor="middle" fill="#636d83" font-size="9">expire → “not clicked” (CTR)</text>
+                <line x1="480" y1="75" x2="538" y2="75" stroke="#63dfc2" stroke-width="1.4" marker-end="url(#arr11f)"/>
+                <line x1="30" y1="126" x2="750" y2="126" stroke="#2b3859" stroke-width="1" stroke-dasharray="5 5"/>
+                <text x="30" y="156" fill="#63dfc2">STREAM-TABLE (enrichment) — activity events + profile changelog</text>
+                <rect x="30" y="170" width="180" height="30" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="120" y="189" text-anchor="middle" fill="#d9e0ee" font-size="9">activity events (userID)</text>
+                <rect x="30" y="214" width="180" height="44" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="120" y="232" text-anchor="middle" fill="#d9e0ee" font-size="9">profile DB changelog</text>
+                <text x="120" y="248" text-anchor="middle" fill="#636d83" font-size="8.5">via CDC — keeps local copy fresh</text>
+                <rect x="300" y="182" width="160" height="62" rx="10" fill="rgba(99,223,194,0.06)" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="380" y="202" text-anchor="middle" fill="#63dfc2" font-size="9.5">local replica</text>
+                <text x="380" y="218" text-anchor="middle" fill="#8d97ad" font-size="9">in-memory hash table or</text>
+                <text x="380" y="232" text-anchor="middle" fill="#8d97ad" font-size="9">on-disk index — no RPC</text>
+                <line x1="210" y1="185" x2="298" y2="200" stroke="#63dfc2" stroke-width="1.4" marker-end="url(#arr11f)"/>
+                <line x1="210" y1="235" x2="298" y2="222" stroke="#63dfc2" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arr11f)"/>
+                <rect x="540" y="196" width="200" height="36" rx="8" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="640" y="218" text-anchor="middle" fill="#63dfc2" font-size="9.5">enriched events out</text>
+                <line x1="460" y1="212" x2="538" y2="212" stroke="#63dfc2" stroke-width="1.4" marker-end="url(#arr11f)"/>
+                <line x1="30" y1="284" x2="750" y2="284" stroke="#2b3859" stroke-width="1" stroke-dasharray="5 5"/>
+                <text x="30" y="314" fill="#d9e0ee">TABLE-TABLE (materialized view maintenance) — tweets × follows → timelines</text>
+                <rect x="30" y="328" width="180" height="30" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="120" y="347" text-anchor="middle" fill="#d9e0ee" font-size="9">tweets changelog</text>
+                <rect x="30" y="372" width="180" height="30" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="120" y="391" text-anchor="middle" fill="#d9e0ee" font-size="9">follows changelog</text>
+                <rect x="300" y="336" width="200" height="60" rx="10" fill="#151c30" stroke="#2b3859" stroke-width="1.4"/>
+                <text x="400" y="356" text-anchor="middle" fill="#8d97ad" font-size="9.5">stream processor</text>
+                <text x="400" y="372" text-anchor="middle" fill="#8d97ad" font-size="9">keeps follower-set state;</text>
+                <text x="400" y="386" text-anchor="middle" fill="#8d97ad" font-size="9">window back to t = −∞</text>
+                <line x1="210" y1="343" x2="298" y2="356" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr11g)"/>
+                <line x1="210" y1="387" x2="298" y2="374" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr11g)"/>
+                <rect x="560" y="330" width="180" height="72" rx="10" fill="rgba(240,179,92,0.07)" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="650" y="350" text-anchor="middle" fill="#f0b35c" font-size="9.5">TIMELINES</text>
+                <text x="650" y="366" text-anchor="middle" fill="#636d83" font-size="9">a materialized view of the</text>
+                <text x="650" y="380" text-anchor="middle" fill="#636d83" font-size="9">tweets ⋈ follows join —</text>
+                <text x="650" y="394" text-anchor="middle" fill="#636d83" font-size="9">every user’s “inbox”</text>
+                <line x1="500" y1="366" x2="558" y2="366" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr11g)"/>
+                <rect x="30" y="428" width="720" height="50" rx="10" fill="#151c30" stroke="#2b3859"/>
+                <text x="390" y="448" text-anchor="middle" fill="#8d97ad" font-size="9.5">all three: the processor maintains STATE from one input (indexed searches, profile replica, follower sets)</text>
+                <text x="390" y="466" text-anchor="middle" fill="#8d97ad" font-size="9.5">and queries that state on messages from the other input — a join that never ends</text>
+              </g>
+            </svg>
+            <p class="fig-caption">Same skeleton, three join shapes. <strong>Stream-stream:</strong> both inputs are activity events; the join operator searches for related events within some window of time — a click matched to the search that produced it, keyed by session ID. The click may never come, the delay may be seconds or days, and due to network delays the click may even arrive <em>before</em> the search — you choose a window (say, at most one hour apart) and live with it. Note that embedding the search details in the click event is not a substitute: that would only tell you about clicks, and for accurate click-through rates you also need the searches that went unclicked. <strong>Stream-table:</strong> one input is activity events, the other a database changelog; the changelog keeps a local copy of the database up to date, and each activity event is enriched by querying it — a local lookup, not a remote query (which would be slow and could overload the database). A stream-table join is very similar to a stream-stream join where the table’s window reaches back to the “beginning of time,” with newer versions overwriting older. <strong>Table-table:</strong> both inputs are changelogs; every change on one side is joined with the latest state of the other, producing a stream of changes to the materialized view of the join.</p>
+          </div>
+
+          <h4>The Twitter timeline as a table-table join</h4>
+          <p>Chapter 1’s timeline cache — a per-user “inbox” so reading the timeline is a single lookup — is maintained by exactly four event types: when user u sends a tweet, it is added to the timeline of every follower of u; when a user deletes a tweet, it is removed from all timelines; when u1 starts following u2, u2’s recent tweets are added to u1’s timeline; when u1 unfollows u2, u2’s tweets are removed from u1’s timeline. Implementing this in a stream processor requires event streams for tweets (sending and deleting) and follow relationships (following and unfollowing), plus a database of each user’s follower set so the processor knows which timelines to update. Looked at another way, the processor maintains a <strong>materialized view</strong> of this query:</p>
+          <div class="code-block">SELECT follows.follower_id AS timeline_id,
+       array_agg(tweets.* ORDER BY tweets.timestamp DESC)
+FROM tweets
+JOIN follows ON follows.followee_id = tweets.sender_id
+GROUP BY follows.follower_id</div>
+          <p>The join of the streams corresponds directly to the join of the tables in that query; the timelines are effectively a cache of the query result, updated every time the underlying tables change. (A neat footnote: if you regard a stream as the derivative of a table, the stream of changes to the materialized join follows the product rule — <code>(u·v)′ = u′v + uv′</code>: any change of tweets is joined with the current followers, and any change of followers is joined with the current tweets.)</p>
+
+          <h3 id="s-timedep">11.3.7 — Time-dependence of joins</h3>
+          <p>All three join types have a lot in common: the processor maintains state from one join input and queries it on messages from the other. And in all three, <strong>the order of the events that maintain the state is important</strong> — it matters whether you first follow and then unfollow, or the other way round. A partitioned log preserves ordering within each partition, but there is typically no ordering guarantee across different streams or partitions. So: if events on different streams happen around a similar time, in which order are they processed? If a user updates their profile, which activity events are joined with the old profile, and which with the new? If state changes over time and you join with some state, <strong>what point in time do you use for the join?</strong></p>
+          <p>This time dependence is everywhere — if you sell things, the right tax rate depends on the country, the product type, and the date of sale, since tax rates change; when joining sales to tax rates you probably want the rate <em>at the time of sale</em>, which may differ from the current rate when reprocessing historical data. If ordering across streams is undetermined, the join becomes <strong>nondeterministic</strong>: rerun the same job on the same input and you may get a different result, because the input streams interleaved differently. In data warehouses this issue is known as a <strong>slowly changing dimension (SCD)</strong>, often addressed by giving each version of the joined record a unique identifier — every time the tax rate changes, it gets a new ID, and the invoice references the ID of the rate at the time of sale. That makes the join deterministic, at the cost of keeping every version of the record — <strong>log compaction becomes impossible</strong>.</p>
+
+          <h3 id="s-fault">11.3.8 — Fault tolerance</h3>
+          <p>Chapter 10’s batch frameworks tolerate faults easily: a failed task restarts on another machine, its partial output is discarded, and the result is as if nothing went wrong — input files are immutable, each task writes to a separate file, and output becomes visible only when the task completes successfully. In particular, the output of a batch job is the same as if every input record had been processed <strong>exactly once</strong> — no records skipped, none processed twice. That principle is known as <strong>exactly-once semantics</strong>, although <em>effectively-once</em> would be more descriptive, since records may in fact be processed multiple times while the visible effect is as if processed once. The same problem arises in stream processing but is harder: waiting until a task finishes to make output visible is not an option, because a stream is infinite and you can never finish processing it.</p>
+
+          <h4>Microbatching and checkpoints</h4>
+          <p>One solution: break the stream into small blocks and treat each block like a miniature batch process — <strong>microbatching</strong>, used by Spark Streaming. The batch size is typically around <strong>one second</strong>, a performance compromise: smaller batches mean greater scheduling and coordination overhead; larger batches mean longer delay before results become visible. Microbatching also implicitly provides a tumbling window equal to the batch size (windowed by processing time, not event timestamps); jobs needing larger windows must explicitly carry state from one microbatch to the next. A variant used by Apache Flink: periodically generate rolling <strong>checkpoints</strong> of state and write them to durable storage — if an operator crashes, it restarts from its most recent checkpoint and discards output generated between the checkpoint and the crash. Checkpoints are triggered by barriers in the message stream, like microbatch boundaries but without forcing a particular window size. Within the confines of the framework, both approaches provide the same exactly-once semantics as batch processing. But <strong>as soon as output leaves the stream processor</strong> — writing to a database, sending messages to an external broker, sending emails — the framework can no longer discard the output of a failed batch: restarting a failed task causes the external side effect to happen twice.</p>
+
+          <h4>Atomic commit revisited</h4>
+          <p>To give the appearance of exactly-once processing in the presence of faults, all outputs and side effects of processing an event must take effect <strong>if and only if</strong> the processing is successful: messages sent downstream, database writes, changes to operator state, acknowledgments of input messages — including moving the consumer offset forward. They must all happen atomically, or none of them. If that sounds familiar, it is the atomic commit problem from Chapter 9. The traditional implementations (XA) have problems, but in more restricted environments an atomic commit facility can be implemented efficiently — Google Cloud Dataflow and VoltDB do this, and similar features were planned for Kafka. Unlike XA, these implementations don’t attempt transactions across heterogeneous technologies; they keep everything internal by managing both state changes and messaging within the stream processing framework, and amortize the protocol overhead by processing several input messages per transaction.</p>
+
+          <h3 id="s-idempotence">11.3.9 — Idempotence and fencing</h3>
+          <p>Distributed transactions are one way to discard the partial output of failed tasks so they can be retried safely; another is to rely on <strong>idempotence</strong>. An idempotent operation is one you can perform multiple times with the same effect as performing it once: setting a key in a key-value store to a fixed value is idempotent (re-writing the identical value changes nothing); incrementing a counter is not (re-performing it increments twice). Even an operation that is not naturally idempotent can often be made so with a bit of metadata: when consuming from Kafka, every message has a persistent, monotonically increasing offset — when writing to an external database, include the offset of the message that triggered the last write, and you can tell whether an update has already been applied and avoid performing it again. Storm’s Trident state handling is based on a similar idea. Relying on idempotence assumes: restarting a failed task must replay the same messages in the same order (a log-based broker does exactly this), the processing must be deterministic, and no other node may concurrently update the same value. When failing over from one processing node to another, <strong>fencing</strong> (Chapter 8) may be needed to prevent interference from a node believed dead but actually alive. Despite the caveats, idempotent operations achieve exactly-once semantics with only a small overhead — the recipe of idempotence plus transactional offset commit.</p>
+
+          <h3 id="s-rebuild">11.3.10 — Rebuilding state after a failure</h3>
+          <p>Any stream process that requires state — windowed aggregations (counters, averages, histograms), tables and indexes for joins — must ensure that state can be recovered after a failure. Options, each with real trade-offs:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Remote datastore, replicated</h4><p>Keep state in a remote datastore and replicate it. Downside: querying a remote database for each individual message can be slow — the same problem as the naive stream-table join.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Local state, periodically replicated</h4><p>Keep state local to the stream processor and replicate it periodically; on recovery, the new task reads the replicated state and resumes. Flink periodically captures snapshots of operator state and writes them to durable storage such as HDFS; Samza and Kafka Streams replicate state changes by sending them to a dedicated Kafka topic with log compaction (very like CDC); VoltDB replicates state by redundantly processing each input message on several nodes.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Rebuild from the input streams</h4><p>Sometimes replication isn’t even necessary: if the state is aggregations over a fairly short window, it may be fast enough to replay the input events for that window; if the state is a CDC-maintained local replica of a database, it can be rebuilt from the log-compacted change stream.</p></div></div>
+          </div>
+          <p>All these trade-offs depend on the performance characteristics of the infrastructure — in some systems network delay is lower than disk access latency, and network bandwidth comparable to disk bandwidth. There is no universally ideal trade-off, and the merits of local versus remote state may shift as storage and networking evolve.</p>
+
+          <div class="callout note">
+            <p class="callout-title">The bridge to Chapter 12</p>
+            <p>One famous answer to combining stream processing’s low latency with batch processing’s reliability — the <strong>lambda architecture</strong>, running a stream system for quick approximate results and a batch system that later corrects them over the same events — sits right on the boundary between this chapter and the next, where its promises <em>and its practical problems</em> get the full treatment. The short version: the same benefits are increasingly available from a single system that can do both, and the final chapter explains exactly what that requires.</p>
+          </div>
+        </section>
+        <!-- ================= 11.4 ================= -->
+        <section class="block reveal" id="s-summary">
+          <p class="kicker">11.4 <span class="dim">·</span> Pulling it together</p>
+          <h2>Summary</h2>
+          <p>Stream processing is very much like the batch processing of Chapter 10, but done continuously on unbounded, never-ending streams rather than a fixed-size input. From that perspective, <strong>message brokers and event logs serve as the streaming equivalent of a filesystem</strong>. The two broker families, one last time:</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>AMQP/JMS-style broker <span class="tag">asynchronous RPC</span></h4>
+              <p>The broker assigns individual messages to consumers, who acknowledge individual messages; messages are deleted once acknowledged. Appropriate as an asynchronous form of RPC — task queues, where the exact order of processing is not important and there is no need to go back and read old messages after they have been processed.</p>
+            </div>
+            <div class="term">
+              <h4>Log-based broker <span class="tag">derived data</span></h4>
+              <p>The broker assigns all messages in a partition to the same consumer node and always delivers them in the same order. Parallelism comes from partitioning; consumers track their progress by checkpointing the offset. The broker retains messages on disk, so it is possible to jump back and reread old messages if necessary. Similar to database replication logs and log-structured storage engines — and especially appropriate for stream processing systems that consume input streams and generate derived state or derived output streams.</p>
+            </div>
+          </div>
+          <p>Where streams come from: user activity events, periodic sensor readings, data feeds — and <strong>writes to a database</strong>, captured implicitly through change data capture or explicitly through event sourcing. Log compaction allows the stream to retain a full copy of a database’s contents. Representing databases as streams opens powerful integration opportunities: keep derived systems continually up to date by consuming the log of changes, and build fresh views onto existing data by consuming the log from the beginning all the way to the present. Those same facilities — maintaining state as streams, replaying messages — are the basis for stream joins and for fault tolerance via microbatching, checkpointing, transactions, and idempotent writes. And the deep problems that remain — event time versus processing time, stragglers, time-dependent joins — are the ones that make stream processing feel genuinely different from batch: <strong>time itself becomes a first-class concern</strong>.</p>
+
+          <h3>Glossary</h3>
+          <dl class="kv">
+            <div class="kv-row"><dt>stream</dt><dd>Data that is incrementally made available over time. Appears as stdin/stdout in Unix, lazy lists, FileInputStream, TCP connections, streaming audio/video — and, in this chapter, event streams as a data management mechanism.</dd></div>
+            <div class="kv-row"><dt>event</dt><dd>A small, self-contained, immutable object containing the details of something that happened at some point in time, usually with a timestamp. May be encoded as text, JSON, or binary; stored by appending to a file or database; or sent over the network.</dd></div>
+            <div class="kv-row"><dt>producer / consumer / topic</dt><dd>Producer (publisher, sender) generates an event once; consumers (subscribers, recipients) may process it; related events are grouped into a topic or stream — the streaming analogue of a filename.</dd></div>
+            <div class="kv-row"><dt>backpressure</dt><dd>Flow control: blocking the producer from sending more messages when it outruns consumers — how Unix pipes and TCP behave, with their small fixed-size buffers. The alternatives are dropping messages or buffering in a queue.</dd></div>
+            <div class="kv-row"><dt>message broker</dt><dd>A server, essentially a database optimized for message streams, that producers write to and consumers read from. Centralizes durability; allows unbounded queueing; consumers are asynchronous — the producer waits only for the broker’s confirmation of buffering.</dd></div>
+            <div class="kv-row"><dt>broker vs database</dt><dd>Brokers delete on successful delivery (databases keep until explicit deletion); assume short queues; offer topic-pattern subscriptions instead of secondary indexes; notify on change instead of answering point-in-time queries. JMS/AMQP tradition: RabbitMQ, ActiveMQ, IBM MQ, and kin.</dd></div>
+            <div class="kv-row"><dt>load balancing (messaging)</dt><dd>Each message delivered to one of a group of consumers, so they share the work — useful for expensive-to-process messages. AMQP: multiple clients on one queue; JMS: shared subscription.</dd></div>
+            <div class="kv-row"><dt>fan-out (messaging)</dt><dd>Each message delivered to all consumers, each independently tuned in without affecting the others — the streaming equivalent of several batch jobs reading the same input file.</dd></div>
+            <div class="kv-row"><dt>acknowledgment / redelivery</dt><dd>A client must explicitly confirm processing so the broker can remove the message; timeout without an ack means redelivery to another consumer. Combined with load balancing, redelivery inevitably reorders messages — the m3/m4 swap.</dd></div>
+            <div class="kv-row"><dt>log-based message broker</dt><dd>A broker whose storage is a partitioned, durable log: producers append, consumers read sequentially and wait at the tail (like tail -f). Kafka, Kinesis Streams, DistributedLog; Google Cloud Pub/Sub is architecturally similar with a JMS-style API. Millions of messages per second via partitioning, fault tolerance via replication.</dd></div>
+            <div class="kv-row"><dt>partitioned log / offset</dt><dd>The broker’s storage split across machines (Chapter 6 partitioning); a topic is a group of partitions. Within a partition, every message gets a monotonically increasing offset — messages in a partition are totally ordered; across partitions, no ordering guarantee.</dd></div>
+            <div class="kv-row"><dt>consumer group</dt><dd>A set of consumer nodes that collectively receive all messages of a topic, with each partition assigned to exactly one node in the group. Load balancing is per-partition, so the number of nodes is at most the number of partitions; fan-out is free because reading doesn’t delete.</dd></div>
+            <div class="kv-row"><dt>consumer offset</dt><dd>A consumer’s position in a partition. All offsets below it are processed, all above unseen — so the broker only periodically records offsets instead of tracking per-message acks. The same idea as the log sequence number that lets a replication follower reconnect and resume. Crash past the recorded offset → messages processed twice.</dd></div>
+            <div class="kv-row"><dt>ring buffer (circular buffer)</dt><dd>What the log effectively is: a bounded-size buffer on disk that discards old messages when full. A 6 TB drive at 150 MB/s holds about 11 hours of writes; deployments typically retain days or weeks. Throughput stays constant regardless of retention, because every message is written to disk anyway.</dd></div>
+            <div class="kv-row"><dt>replay</dt><dd>Reprocessing old messages by resetting a consumer offset — non-destructive because the log is read-only to consumers. Enables experimentation with new code on real history, recovery from bugs by reprocessing with fixed code, and rebuilding derived systems from offset 0.</dd></div>
+            <div class="kv-row"><dt>dual writes</dt><dd>Application code writing to each of several systems directly when data changes. Two fatal problems: a race condition (two clients, two systems, two different write orders → permanent inconsistency with no error) and partial failure (one write succeeds, the other doesn’t → atomic commit problem).</dd></div>
+            <div class="kv-row"><dt>change data capture (CDC)</dt><dd>Observing all data changes written to a database and extracting them in a form that can be replicated to other systems — making one database the leader and the derived systems followers. Implementations: triggers (fragile, overhead) vs parsing the replication log (robust, schema-change challenges): Databus, Wormhole, Sherpa, Bottled Water, Maxwell, Debezium, Mongoriver, GoldenGate. Usually asynchronous — replication lag applies.</dd></div>
+            <div class="kv-row"><dt>initial snapshot</dt><dd>A consistent full copy of the database corresponding to a known offset in the change log, needed when the log doesn’t retain all history — the same mechanism as setting up a new follower.</dd></div>
+            <div class="kv-row"><dt>log compaction (in CDC)</dt><dd>Keeping only the most recent value per key in the log — disk depends on current database contents, not write history. A new derived system can be rebuilt by consuming the compacted topic from offset 0, no snapshot needed. Supported by Kafka.</dd></div>
+            <div class="kv-row"><dt>event sourcing</dt><dd>Storing all changes to application state as a log of application-level events, with the event store append-only and updates/deletes discouraged. State is derived by deterministic replay. Unlike CDC events, later events don’t override earlier ones, so full history is needed — compaction is not possible the same way. From the domain-driven design community.</dd></div>
+            <div class="kv-row"><dt>command vs event</dt><dd>A user request starts as a command that may still fail validation; once validated and accepted it becomes an event — durable, immutable, a fact. Consumers may not reject events (they are already in the log), so validation must happen synchronously before the event exists (or via tentative-then-confirmed event pairs).</dd></div>
+            <div class="kv-row"><dt>state = integral of events</dt><dd>Mutable state and an immutable event log are two sides of the same coin: state is the result of the events that mutated it over time; the changelog is the derivative of state, state the integral of the stream. “The truth is the log; the database is a cache of a subset of the log” (Helland).</dd></div>
+            <div class="kv-row"><dt>compensating transaction</dt><dd>How accountants fix mistakes: never erase the wrong entry — append a correcting entry, and keep the mistake in the ledger forever for audit. The same idea underwrites recovery from buggy code with immutable logs.</dd></div>
+            <div class="kv-row"><dt>CQRS</dt><dd>Command query responsibility segregation: separate the write-optimized form of data (the event log) from one or more read-optimized views derived from it. Normalization debates dissolve — denormalizing read views is fine when the translation process keeps them consistent. Twitter’s fan-out timelines are read-optimized, denormalized state.</dd></div>
+            <div class="kv-row"><dt>excision / shunning</dt><dd>History-rewriting deletion: Datomic’s excision and Fossil’s shunning remove data as if it was never written, for privacy or legal reasons. Truly deleting data is surprisingly hard — copies live in storage engines, filesystems, SSDs, and deliberately immutable backups.</dd></div>
+            <div class="kv-row"><dt>complex event processing (CEP)</dt><dd>Analyzing streams for event patterns with declarative rules, maintained as state machines; matches emit “complex events.” Reverses the database: queries are stored long-term, data flows past them. Esper, IBM InfoSphere Streams, Apama, StreamBase, SQLstream.</dd></div>
+            <div class="kv-row"><dt>stream analytics</dt><dd>Aggregations and statistical metrics over many events — rates, rolling averages, comparisons to previous periods — computed over windows. Sometimes uses probabilistic algorithms (Bloom filters, HyperLogLog) as a memory optimization, but nothing about stream processing is inherently approximate.</dd></div>
+            <div class="kv-row"><dt>percolator / search on streams</dt><dd>Storing the queries and running the documents past them — Elasticsearch’s percolator matches streaming documents against registered searches; media monitoring and real-estate alerts work this way. Index the queries to avoid testing every document against every query.</dd></div>
+            <div class="kv-row"><dt>event time vs processing time</dt><dd>When the event happened vs when the stream processor saw it. They diverge arbitrarily (queueing, network faults, restarts, reprocessing), so processing-time windowing manufactures artifacts — a backlog looks like a spike. The Star Wars release-order analogy: episode number is event time, the date you watched is processing time.</dd></div>
+            <div class="kv-row"><dt>straggler event</dt><dd>An event arriving after its window was declared complete. Handle by ignoring it (track the dropped count as a metric, alert on growth) or by publishing a correction (possibly retracting earlier output).</dd></div>
+            <div class="kv-row"><dt>three timestamps</dt><dd>Device-clock time of occurrence, device-clock time of sending, server-clock time of receipt — subtracting the second from the third estimates the device–server clock offset, which corrects the event timestamp (assuming negligible network delay and a stable offset).</dd></div>
+            <div class="kv-row"><dt>tumbling window</dt><dd>Fixed length, non-overlapping; every event belongs to exactly one. Implement by rounding each event timestamp down to the window boundary.</dd></div>
+            <div class="kv-row"><dt>hopping window</dt><dd>Fixed length, advanced by a step, overlapping for smoothing: 5-minute windows with a 1-minute hop. Implement as aggregations over several adjacent tumbling windows.</dd></div>
+            <div class="kv-row"><dt>sliding window</dt><dd>Contains all events within some interval of each other — no fixed boundaries. Implement with a time-sorted buffer of events, expiring old ones. The only window type that would group 10:03:39 with 10:08:12 in a 5-minute window.</dd></div>
+            <div class="kv-row"><dt>session window</dt><dd>No fixed duration: groups all events for one user closely together in time, ending after an inactivity gap (say, 30 minutes). Sessionization — Chapter 10’s grouping job, made continuous.</dd></div>
+            <div class="kv-row"><dt>stream-stream join</dt><dd>Both inputs are activity events (possibly the same stream — a self-join); the operator keeps windowed state indexed by key and matches related events — a click to its search, within at most some window. Missing counterparts emit their own events (un-clicked searches), which is why embedding one event in the other is not a substitute.</dd></div>
+            <div class="kv-row"><dt>stream-table join (enrichment)</dt><dd>Enrich an activity stream with the latest state of a database, kept current via its CDC changelog and held locally (in-memory hash table or on-disk index) to avoid remote lookups. The table’s window reaches back to the beginning of time; newer versions overwrite older.</dd></div>
+            <div class="kv-row"><dt>table-table join</dt><dd>Both inputs are changelogs; the result is a stream of changes to the materialized view of the join — the Twitter timeline maintenance (tweets ⋈ follows), driven by tweet, delete, follow, and unfollow events.</dd></div>
+            <div class="kv-row"><dt>slowly changing dimension (SCD)</dt><dd>The data-warehouse name for time-dependent joins: join with the version of the record current at the event’s time. Version identifiers make the join deterministic, at the price of retaining all versions — no log compaction.</dd></div>
+            <div class="kv-row"><dt>exactly-once semantics</dt><dd>The output is the same as if no faults had occurred even if faults did occur — more honestly “effectively-once,” since retries may reprocess records while the visible effect is as if processed once. Batch gets it free from immutability and all-or-nothing outputs; streams must work for it.</dd></div>
+            <div class="kv-row"><dt>microbatching</dt><dd>Spark Streaming’s fault tolerance: break the stream into small blocks (typically ~1 second) and treat each like a miniature batch. The batch size trades coordination overhead against latency, and implicitly imposes a processing-time tumbling window equal to the batch size.</dd></div>
+            <div class="kv-row"><dt>checkpointing</dt><dd>Flink’s alternative: rolling checkpoints of operator state written to durable storage, triggered by barriers in the message stream — no fixed window size. A crashed operator restarts from its most recent checkpoint and discards output since.</dd></div>
+            <div class="kv-row"><dt>idempotence</dt><dd>An operation with the same effect executed once or many times: set-value yes, increment no. Make non-idempotent operations idempotent with metadata (e.g., include the Kafka message offset with the write to detect already-applied updates). Assumes same-order replay, deterministic processing, no concurrent writers — and fencing on failover.</dd></div>
+            <div class="kv-row"><dt>rebuilding state</dt><dd>Recovery options for windowed aggregates and join state: remote replicated datastore (slow per message), local state periodically replicated (Flink snapshots to HDFS; Samza/Kafka Streams to a compacted topic; VoltDB redundant processing), or rebuild from the input streams (short windows; compacted changelogs). No universal winner.</dd></div>
+          </dl>
+
+          <h3>Further reading</h3>
+          <ul class="reading-list">
+            <li><strong>Jay Kreps, “The Log: What Every Software Engineer Should Know About Real-Time Data’s Unifying Abstraction”</strong><span class="src">engineering.linkedin.com, December 2013 — the essay that made “the log” a first-class architectural idea</span></li>
+            <li><strong>Jay Kreps, Neha Narkhede, and Jun Rao, “Kafka: A Distributed Messaging System for Log Processing”</strong><span class="src">NetDB, June 2011 — the partitioned-log broker this chapter keeps returning to</span></li>
+            <li><strong>“Apache Kafka Documentation” and Jay Kreps, “Benchmarking Apache Kafka: 2 Million Writes Per Second (On Three Cheap Machines)”</strong><span class="src">kafka.apache.org; engineering.linkedin.com, April 2014 — the mechanics and the numbers</span></li>
+            <li><strong>Matei Zaharia, Tathagata Das, et al., “Discretized Streams: An Efficient and Fault-Tolerant Model for Stream Processing on Large Clusters”</strong><span class="src">HotCloud, June 2012 — microbatching in Spark Streaming</span></li>
+            <li><strong>Paris Carbone, Gyula Fóra, Stephan Ewen, et al., “Lightweight Asynchronous Snapshots for Distributed Dataflows”</strong><span class="src">arXiv:1506.08603, June 2015 — Flink’s checkpointing barrier mechanism</span></li>
+            <li><strong>Pat Helland, “Immutability Changes Everything”</strong><span class="src">CIDR, January 2015 — “the truth is the log; the database is a cache of a subset of the log”</span></li>
+            <li><strong>Pat Helland, “Idempotence Is Not a Medical Condition”</strong><span class="src">Communications of the ACM, May 2012 — the case for idempotent operations as an exactly-once mechanism</span></li>
+            <li><strong>Martin Fowler, “Event Sourcing” and “CQRS”</strong><span class="src">martinfowler.com, 2005 / 2011 — the canonical write-ups from the DDD community</span></li>
+            <li><strong>Tyler Akidau, Robert Bradshaw, et al., “The Dataflow Model: A Practical Approach to Balancing Correctness, Latency, and Cost in Massive-Scale, Unbounded, Out-of-Order Data Processing”</strong><span class="src">VLDB, August 2015 — event time, watermarks, and the modern treatment of stragglers</span></li>
+            <li><strong>“State Management,” Apache Samza Documentation</strong><span class="src">samza.apache.org, December 2015 — local state as a fundamental stream-processing primitive</span></li>
+          </ul>
+        </section>
+
+        <!-- ================= quiz ================= -->
+        <section class="quiz-wrap" id="quiz-section">
+          <div class="quiz-head">
+            <div>
+              <p class="kicker">Check yourself <span class="dim">· 13 questions</span></p>
+              <h2>Chapter 11 quiz</h2>
+              <p>Two written, eleven multiple-choice — brokers, logs, and the two meanings of “source of truth.”</p>
+            </div>
+            <span class="chip" id="quiz-last">no score yet</span>
+          </div>
+          <div id="quiz"></div>
+          <button class="mark-complete" id="mark-complete" type="button">Mark chapter complete</button>
+        </section>
+
+        <nav class="lesson-pager">
+          <a class="pager-link" href="chapter10.html">
+            <span class="dir">← Previous</span>
+            <span class="title">Batch Processing</span>
+          </a>
+          <a class="pager-link next" href="chapter12.html">
+            <span class="dir">Next chapter →</span>
+            <span class="title">The Future of Data Systems</span>
+          </a>
+        </nav>
+
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container foot-inner">
+      <p>DDIA practice companion · a fan-made study aid for<br>“Designing Data-Intensive Applications” by Martin Kleppmann (O’Reilly)</p>
+      <p>static site · no trackers · progress in localStorage</p>
+    </div>
+  </footer>
+  <script>
+    window.QUIZ = {
+      lesson: 'chapter11',
+      questions: [
+        {
+          q: 'Compare AMQP/JMS-style message brokers with log-based message brokers: delivery model, ordering, replay, and when each approach fits best. Then reveal.',
+          short: true,
+          answer: 'AMQP/JMS-style: the broker assigns individual messages to consumers, who acknowledge individual messages; acknowledged messages are deleted from the broker. Load balancing is per message, so combined with redelivery it inevitably reorders messages, and consumption is destructive — you cannot re-read old messages or run the same consumer twice with the same result. It fits asynchronous-RPC-style usage: task queues where processing order doesn’t matter much and you never need to go back. Log-based: the broker stores a partitioned, durable log; all messages in a partition go to the same consumer node in the same order, and parallelism comes from partitioning. Consumers track their position with offsets, which the broker only records periodically. Reading is non-destructive, so you can rewind the offset and replay history — rebuild derived systems, reprocess after fixing a bug, experiment with new code on real data. It fits high-throughput streams of fast-to-process messages where ordering matters, and any pipeline that produces derived state. The offset is the same idea as the log sequence number in single-leader replication — the broker is the leader, the consumer a follower.'
+        },
+        {
+          q: 'Explain the dual-writes problem: the race condition, the second (fault-tolerance) failure mode, and why funneling all writes through one ordered log fixes both. Then reveal.',
+          short: true,
+          answer: 'Dual writes means application code writes to each system directly — the database, then the search index, then the cache. Failure one, the race: two clients concurrently update item X (to A and to B). Both write to the database first, then the index. The database may see A-then-B (final value B) while the index sees B-then-A (final value A) — the systems are permanently inconsistent even though no error occurred, and without version-vector-style detection you never even notice. Root cause: there is no single leader — it is multi-leader replication at the application level. Failure two: one write can succeed while the other fails, leaving the systems inconsistent; making both-or-neither is the atomic commit problem, expensive to solve (2PC territory). The fix: funnel all writes through one system that decides the total order — e.g., the database, with the index maintained exclusively via change data capture applied in the same order. That is state machine replication: one leader, derived systems as followers. Log-based brokers are ideal transport because they preserve ordering (no redelivery reordering), and if updates are keyed and idempotent, deterministic retry makes recovery easy.'
+        },
+        {
+          q: 'What is an event, in this chapter’s terms?',
+          options: [
+            'Any row currently stored in a database table',
+            'A small, self-contained, immutable object containing the details of something that happened at some point in time, usually with a timestamp',
+            'A mutable record that the stream processor updates as state changes',
+            'A message that consumers are allowed to reject if it violates a constraint'
+          ],
+          answer: 1,
+          why: 'Events record things that happened: a user viewing a page, a periodic temperature reading, a line in a web server log. They are immutable — the streaming counterpart of the batch job’s input records. And note the last distractor: by the time a consumer sees an event, it is already an immutable part of the log, so consumers may not reject events — validation must happen before, while it is still a command.'
+        },
+        {
+          q: 'A message broker with load balancing redelivered an unacknowledged message to another consumer. What happened to ordering?',
+          options: [
+            'Nothing — JMS and AMQP standards forbid reordering, so it cannot occur',
+            'The broker restores the original order before the consumer sees the messages',
+            'The messages were reordered: with consumer 2 crashing on m3 while consumer 1 processes m4, the redelivered m3 arrives after m4 — load balancing plus redelivery inevitably reorders messages',
+            'The messages are duplicated rather than reordered'
+          ],
+          answer: 2,
+          why: 'Even brokers that otherwise preserve order (as JMS and AMQP require) reorder once load balancing meets redelivery. The escape is a separate queue per consumer — i.e., giving up load balancing. Reordering is harmless for independent messages, but fatal when there are causal dependencies between them.'
+        },
+        {
+          q: 'Why don’t log-based message brokers delete messages when consumers read them?',
+          options: [
+            'Because deleting from an append-only file is computationally expensive',
+            'Because disk space is free',
+            'Because the log is designed as durable storage, not transient messaging: reading is a read-only operation, the consumer controls its own offset, and messages are only removed when old segments age out for disk space — enabling replay and new consumers starting from offset 0',
+            'Because consumers refuse to send acknowledgments on log-based brokers'
+          ],
+          answer: 2,
+          why: 'This is the hybrid of database durability with messaging’s low latency. The broker manages disk space by segmenting the log and deleting old segments — effectively a huge ring buffer (a 6 TB drive at 150 MB/s holds ~11 hours) — so a consumer that falls too far behind can miss old messages, but only that consumer is affected, and it can replay anything still retained by resetting its offset.'
+        },
+        {
+          q: 'What does the consumer offset mechanism buy, compared to per-message acknowledgments?',
+          options: [
+            'Stronger per-message delivery guarantees than AMQP acks',
+            'Nothing — offsets are just acknowledgments renamed',
+            'Much less bookkeeping: everything below a consumer’s offset is processed and everything above is unseen, so the broker only periodically records offsets — and batching and pipelining become possible, raising throughput. It is the same idea as the log sequence number that lets a replication follower reconnect and resume',
+            'It eliminates the possibility of processing any message twice'
+          ],
+          answer: 2,
+          why: 'The offset is the streaming twin of the replication log’s sequence number: broker as leader, consumer as follower. But note the last option is wrong — if a consumer processes messages past its recorded offset and then crashes, those messages are processed a second time on restart, which is exactly the fault-tolerance problem the exactly-once machinery (microbatching, checkpoints, atomic commit, idempotence) exists to solve.'
+        },
+        {
+          q: 'You are choosing how to implement change data capture. Triggers or the replication log — what is the trade-off?',
+          options: [
+            'Triggers are always more robust because they are part of the database',
+            'The replication log is always faster because it is written in C',
+            'Triggers let you decide exactly what gets logged but tend to be fragile with significant performance overheads; parsing the replication log is more robust and captures the true write order, but brings challenges like handling schema changes. Either way, the application writing to the database need not know CDC is happening',
+            'There is no difference — both write the same changelog table'
+          ],
+          answer: 2,
+          why: 'Trigger-based CDC registers triggers that append to a changelog table — flexible but fragile and slow. Log-based CDC reads the database’s own replication log (Bottled Water for PostgreSQL via WAL decoding, Maxwell and Debezium for the MySQL binlog, Mongoriver for the MongoDB oplog, GoldenGate for Oracle) — robust and order-faithful, at the cost of mechanical challenges like schema changes. CDC is usually asynchronous, so replication lag applies to the derived systems.'
+        },
+        {
+          q: 'How does log compaction let you rebuild a derived system without taking a snapshot of the source database?',
+          options: [
+            'It compresses messages with gzip so the log fits in memory',
+            'It keeps the most recent message per key and discards older ones — so scanning the compacted topic from offset 0 yields the current value for every key (plus maybe some stale ones), which is a full copy of the database contents',
+            'It replicates the source database to every consumer automatically',
+            'It deletes messages as soon as any consumer has read them, freeing space for the rebuild'
+          ],
+          answer: 1,
+          why: 'Compaction (from Chapter 3’s log-structured storage) makes the log’s size depend on the database’s current contents, not its write history — tombstones mark deletions. Kafka supports compaction precisely for this: the broker becomes durable storage, not just transient messaging, and a new derived system is just a new consumer starting at offset 0. Note the contrast with event sourcing: its events are intents that do not override each other, so full history is required and compaction is not possible the same way.'
+        },
+        {
+          q: 'CDC versus event sourcing — which statement is right?',
+          options: [
+            'They are identical techniques with different marketing',
+            'CDC is only for NoSQL databases; event sourcing is only for SQL databases',
+            'In CDC the application uses the database mutably and the change log is extracted at a low level; in event sourcing the application explicitly writes immutable application-level events to an append-only store. CDC state can be compacted (latest value per key); event-sourced state requires the full event history',
+            'Event sourcing requires the application to be rewritten whenever CDC is added'
+          ],
+          answer: 2,
+          why: 'Same shape — state as a function of a change log — but a different level of abstraction. CDC: the log is a tap on a mutable database, and the app is unaware. Event sourcing: the log IS the system of record, and events reflect application-level intent (“student cancelled their course enrollment”), which makes new features easy to chain off old events, debugging easier (why did this happen?), and bugs less destructive.'
+        },
+        {
+          q: 'Why does windowing by processing time produce bad data?',
+          options: [
+            'Because processing time is measured in a different timezone than event time',
+            'Because stream processors cannot see the system clock',
+            'Because processing can lag event creation arbitrarily — queueing, network faults, restarts, reprocessing after a bug — so a processor that catches up on a backlog while measuring requests per second by processing time will report an anomalous spike that never happened. Event timestamps keep the computation deterministic and truthful',
+            'Because windows must always be exactly one minute long'
+          ],
+          answer: 2,
+          why: 'The Star Wars analogy: the episode number is the event timestamp, the date you watched is processing time — release order and narrative order disagree, and humans cope, but algorithms must be specifically written for it. The backlog-spike example is the classic artifact. Batch jobs learned this long ago: they always use the timestamps embedded in the events, never the machine clock.'
+        },
+        {
+          q: 'Which window type groups events at 10:03:39 and 10:08:12 into the same 5-minute window?',
+          options: [
+            'A 5-minute tumbling window',
+            'A 5-minute hopping window with a 1-minute hop',
+            'A 5-minute sliding window — it contains all events within some interval of each other, with no fixed boundaries',
+            'No window type can group events more than 5 minutes apart'
+          ],
+          answer: 2,
+          why: 'Fixed-boundary windows (tumbling: 10:03:00–10:03:59, then 10:04:00–…; hopping: 10:03:00–10:07:59, then 10:04:00–10:08:59) both separate the two events. Only the sliding window, defined by mutual distance rather than boundaries, groups them. Implement it with a time-sorted buffer of events, expiring old ones. And session windows are the fourth type: no fixed duration at all — they end after an inactivity gap, e.g. 30 minutes.'
+        },
+        {
+          q: 'Match the example to the join type: (a) clicks joined to searches by session ID within an hour; (b) activity events enriched with current user profiles; (c) Twitter timelines maintained from tweet and follow changelogs.',
+          options: [
+            '(a) stream-table, (b) stream-stream, (c) table-table',
+            '(a) stream-stream, (b) stream-table, (c) table-table',
+            '(a) table-table, (b) stream-table, (c) stream-stream',
+            'All three are stream-stream joins with different window sizes'
+          ],
+          answer: 1,
+          why: 'Stream-stream: both inputs are activity events matched within a window — and remember, embedding the search details in the click event is NOT equivalent, because you also need the un-clicked searches for accurate click-through rates. Stream-table (enrichment): the table is a changelog keeping a local replica current — a window reaching back to the beginning of time. Table-table: both inputs are changelogs, and the result is a stream of changes to the materialized view of the join — the timelines are a cache of the tweets ⋈ follows query.'
+        },
+        {
+          q: 'Why aren’t microbatching and checkpointing enough for exactly-once semantics?',
+          options: [
+            'They are — the chapter says they solve everything',
+            'Because the batches are too small to be reliable',
+            'Because they only work within the stream processing framework: once output leaves it (database writes, external brokers, emails), the framework can no longer discard the output of a failed batch — restarting a failed task repeats the external side effect. You need atomic commit of all effects (Google Cloud Dataflow / VoltDB style) or idempotence with fencing',
+            'Because checkpoints must be written to the same disk as the log'
+          ],
+          answer: 2,
+          why: 'Within the framework, microbatching (Spark Streaming, ~1-second batches) and checkpointing (Flink, barrier-triggered rolling snapshots) match batch processing’s exactly-once. Outside it, side effects escape the framework’s control. The end-to-end fix is idempotent writes (e.g., including the Kafka message offset to detect already-applied updates), which assumes same-order replay, deterministic processing, and no concurrent updates — plus fencing when failing over — or an internal atomic commit facility that manages state changes and messaging together, amortized over several input messages per transaction.'
+        }
+      ]
+    };
+  </script>
+  <script src="../js/shared.js"></script>
+  <script src="../js/quiz.js"></script>
+  <script src="../js/toc.js"></script>
+</body>
+</html>

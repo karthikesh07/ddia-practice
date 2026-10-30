@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flashcards — DDIA Practice</title>
+  <meta name="description" content="Interactive flashcard trainer for Designing Data-Intensive Applications: 218 cards across all twelve chapters. Click to flip, shuffle, and track what you know.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d14'/%3E%3Cpath d='M16 6l9 10-9 10-9-10z' fill='%23f0b35c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Spline+Sans:wght@300..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
+  
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-active="flashcards">
+
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="index.html">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <rect x="1" y="2" width="16" height="4" rx="1.5" stroke="#f0b35c" stroke-width="1.6"/>
+          <rect x="1" y="7" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+          <rect x="1" y="12" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+        </svg>
+        DDIA&nbsp;<span class="dim">/ practice</span>
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="index.html" data-nav="home">Home</a>
+        <a href="index.html#lessons" data-nav="lessons">Lessons</a>
+        <a href="flashcards.html" data-nav="flashcards">Flashcards</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <section class="fc-header">
+      <p class="kicker">Spaced repetition <span class="dim">· 218 cards · all chapters</span></p>
+      <h1>The deck</h1>
+      <p class="lede">Click a card to flip it. Be honest with yourself: <em>mark known</em> only when the answer came without effort. Unknown cards stay in rotation.</p>
+    </section>
+
+    <div class="fc-stage">
+
+      <div class="fc-card" id="fc-card" role="button" tabindex="0" aria-label="Flashcard — click to flip">
+        <div class="fc-inner">
+          <div class="fc-face fc-front">
+            <p class="fc-label">Question</p>
+            <p class="fc-text" id="fc-front">…</p>
+            <p class="fc-hint">click the card or press space to flip</p>
+          </div>
+          <div class="fc-face fc-back">
+            <p class="fc-label">Answer</p>
+            <p class="fc-text" id="fc-back">…</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="fc-empty" id="fc-empty" style="display:none">
+        <h2 style="font-family:var(--serif);font-weight:500;color:var(--text-strong);margin:0 0 8px">Everything in this filter is marked known.</h2>
+        <p>Turn off “unknown only”, or reset your progress to run the whole deck again.</p>
+        <button class="btn ghost" id="fc-empty-undo" type="button">Show all cards</button>
+      </div>
+
+      <div class="fc-meta-row" id="fc-meta-row">
+        <span class="chip" id="fc-lesson">L1</span>
+        <span class="fc-counter" id="fc-counter">card 1 / 25</span>
+        <span class="chip" id="fc-known-badge">unmarked</span>
+      </div>
+
+      <div class="fc-controls" id="fc-controls-row">
+        <button class="icon-btn" id="fc-prev" type="button" aria-label="Previous card">←</button>
+        <button class="icon-btn" id="fc-flip" type="button" aria-label="Flip card" style="width:58px;height:58px;font-size:1.2rem">↻</button>
+        <button class="icon-btn" id="fc-next" type="button" aria-label="Next card">→</button>
+      </div>
+
+      <div class="fc-actions" id="fc-actions-row">
+        <button class="btn ghost good" id="fc-known" type="button">✓ I knew it</button>
+        <button class="btn ghost bad" id="fc-unknown" type="button">✕ Still learning</button>
+      </div>
+
+      <div class="fc-progress" id="fc-progress">
+        <div class="bar"><i id="fc-bar-fill" style="width:0%"></i></div>
+        <div class="row">
+          <span id="fc-bar-label">0 of 218 cards known</span>
+          <span>click a card to flip</span>
+        </div>
+      </div>
+
+      <div class="fc-toolbar">
+        <button class="chip" id="fc-shuffle" type="button">⤮ shuffle deck</button>
+        <button class="chip" id="fc-only-unknown" type="button">unknown only</button>
+        <button class="chip danger" id="fc-reset" type="button">reset progress</button>
+      </div>
+
+      <p class="kbd-hints">
+        <kbd>←</kbd><kbd>→</kbd> navigate &nbsp;·&nbsp; <kbd>space</kbd> flip &nbsp;·&nbsp;
+        <kbd>K</kbd> known &nbsp;·&nbsp; <kbd>U</kbd> unknown &nbsp;·&nbsp; <kbd>S</kbd> shuffle
+      </p>
+    </div>
+
+  </main>
+
+  <footer>
+    <div class="container foot-inner">
+      <p>DDIA practice companion · a fan-made study aid for<br>“Designing Data-Intensive Applications” by Martin Kleppmann (O’Reilly)</p>
+      <p>static site · no trackers · progress in localStorage</p>
+    </div>
+  </footer>
+
+  <script src="js/cards.js"></script>
+  <script src="js/shared.js"></script>
+  <script src="js/flashcards.js"></script>
+  <script>
+    /* wire the empty-state button to toggle the filter back off */
+    (function () {
+      var b = document.getElementById('fc-empty-undo');
+      var f = document.getElementById('fc-only-unknown');
+      if (b && f) b.addEventListener('click', function () { f.click(); });
+    })();
+  </script>
+</body>
+</html>

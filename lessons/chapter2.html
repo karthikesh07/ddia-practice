@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chapter 2 · Data Models and Query Languages — DDIA Practice</title>
+  <meta name="description" content="A comprehensive study guide to Chapter 2 of Designing Data-Intensive Applications: relational vs document vs graph models, CODASYL and access paths, schema-on-read, declarative query languages, MapReduce, Cypher, SPARQL, and Datalog.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d14'/%3E%3Cpath d='M16 6l9 10-9 10-9-10z' fill='%23f0b35c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Spline+Sans:wght@300..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
+  
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-active="lessons" class="is-lesson">
+
+  <div class="reading-progress" id="readingProgress" aria-hidden="true"></div>
+
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="../index.html">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <rect x="1" y="2" width="16" height="4" rx="1.5" stroke="#f0b35c" stroke-width="1.6"/>
+          <rect x="1" y="7" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+          <rect x="1" y="12" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+        </svg>
+        DDIA&nbsp;<span class="dim">/ practice</span>
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="../index.html" data-nav="home">Home</a>
+        <a href="../index.html#lessons" data-nav="lessons">Lessons</a>
+        <a href="../flashcards.html" data-nav="flashcards">Flashcards</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+
+    <div class="lesson-hero">
+      <span class="lesson-hero-num" aria-hidden="true">2</span>
+      <div class="container">
+        <a class="crumb" href="../index.html#lessons">← All chapters</a>
+        <p class="kicker">Chapter 02 <span class="dim">· Part I — Foundations</span></p>
+        <h1>Data Models and Query Languages</h1>
+        <p class="lede">Data models are the most important part of developing software — they don’t just affect how the software is written, they affect how we <em>think about the problem</em>.</p>
+        <div class="lesson-meta">
+          <span class="chip">Relational</span>
+          <span class="chip">Document</span>
+          <span class="chip">Graph</span>
+          <span class="chip">Declarative queries</span>
+          <span class="chip">Cypher / SPARQL / Datalog</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pullquote container">
+      <p>“The limits of my language mean the limits of my world.”</p>
+      <cite>— Ludwig Wittgenstein, Tractatus Logico-Philosophicus (1922)</cite>
+    </div>
+
+    <div class="chapter-layout container">
+
+      <aside class="toc" aria-label="Chapter contents">
+        <p class="toc-title">Ch 2 contents</p>
+        <ul>
+          <li><a href="#s-intro">2.0 Layers of abstraction</a></li>
+          <li><a href="#s-relational">2.1 Relational vs. document</a></li>
+          <li><a href="#s-history" class="sub">History &amp; the birth of NoSQL</a></li>
+          <li><a href="#s-mismatch" class="sub">The object-relational mismatch</a></li>
+          <li><a href="#s-many" class="sub">Many-to-one &amp; many-to-many</a></li>
+          <li><a href="#s-repeating" class="sub">Repeating history? IMS &amp; CODASYL</a></li>
+          <li><a href="#s-today" class="sub">Relational vs. document today</a></li>
+          <li><a href="#s-query">2.2 Query languages</a></li>
+          <li><a href="#s-declarative" class="sub">Declarative vs. imperative</a></li>
+          <li><a href="#s-mapreduce" class="sub">MapReduce querying</a></li>
+          <li><a href="#s-graph">2.3 Graph-like data models</a></li>
+          <li><a href="#s-property" class="sub">Property graphs</a></li>
+          <li><a href="#s-cypher" class="sub">Cypher</a></li>
+          <li><a href="#s-sqlgraph" class="sub">Graph queries in SQL</a></li>
+          <li><a href="#s-triple" class="sub">Triple-stores &amp; SPARQL</a></li>
+          <li><a href="#s-datalog" class="sub">Datalog</a></li>
+          <li><a href="#s-summary">2.4 Summary &amp; glossary</a></li>
+          <li><a href="#quiz-section">Quiz</a></li>
+        </ul>
+      </aside>
+
+      <div class="lesson-body">
+
+        <!-- ================= 2.0 ================= -->
+        <section class="block reveal" id="s-intro">
+          <p class="kicker">2.0 <span class="dim">·</span> Before the arguments</p>
+          <h2>Every system is a stack of data models</h2>
+          <p>Software is built in layers, and every layer is a data model. Working down from your application to the metal, there are (at least) four:</p>
+          <ol>
+            <li><strong>Application developers</strong> look at the real world — people, organizations, goods, actions, money flows, sensors — and model it as objects and data structures specific to their application.</li>
+            <li>Those structures are expressed in a <strong>general-purpose data model</strong>: JSON or XML documents, tables in a relational database, or a graph model.</li>
+            <li>Database engineers take that JSON/relational/graph data and represent it as <strong>bytes in memory, on disk, or on the network</strong>, in a way that allows querying, searching, manipulation, and processing.</li>
+            <li>Hardware engineers take those bytes and represent them as <strong>electrical currents, pulses of light, or magnetic fields</strong>.</li>
+          </ol>
+          <p>Each layer hides the complexity of the layer below it behind a clean data model — that’s how database vendors and application developers can work together at all. And every data model carries <em>assumptions</em>: some operations are easy, some unsupported; some fast, some slow; some transformations natural, some awkward. Mastering even one model takes enormous effort (entire books exist on relational modeling alone), so which model you pick for your application matters enormously.</p>
+          <p>This chapter compares the three heavyweights — <strong>relational</strong>, <strong>document</strong>, and <strong>graph</strong> — and the query languages that ride on them. Chapter 3 then looks at how those models are actually stored on disk.</p>
+        </section>
+
+        <!-- ================= 2.1 ================= -->
+        <section class="block reveal" id="s-relational">
+          <p class="kicker">2.1 <span class="dim">·</span> The main event</p>
+          <h2>Relational model versus document model</h2>
+
+          <h3 id="s-history">A short history of the relational model</h3>
+          <p>The best-known data model today is SQL, based on the relational model proposed by <strong>Edgar Codd in 1970</strong>: data organized into <em>relations</em> (tables in SQL), each an <em>unordered collection of tuples</em> (rows). It was a theoretical proposal — many doubted it could be implemented efficiently — but by the <strong>mid-1980s</strong> RDBMS and SQL were the tools of choice, and their dominance lasted ~25–30 years: an eternity in computing.</p>
+          <p>The relational model’s roots are business data processing on mainframes in the 1960s and ’70s: transaction processing (sales, banking, airline reservations, stock-keeping) and batch processing (invoicing, payroll, reporting). Its goal was radical at the time: <strong>hide the internal representation of data behind a clean interface</strong> — while competing databases forced developers to think about how the data was stored internally.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Era</th><th>Contender</th><th>What happened</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>1970s–early ’80s</td><td>Network model, hierarchical model</td><td>Main alternatives — the relational model dominated them</td></tr>
+                <tr><td>Late ’80s–early ’90s</td><td>Object databases</td><td>Came and went</td></tr>
+                <tr><td>Early 2000s</td><td>XML databases</td><td>Niche adoption only</td></tr>
+                <tr><td>2010s</td><td>NoSQL</td><td>The latest attempt to overthrow relational dominance</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Every competitor generated hype in its time; none lasted. Meanwhile the relational model generalized far beyond business processing — into online publishing, discussion, social networking, e-commerce, games, and SaaS.</p>
+
+          <h3 id="s-history2">The birth of NoSQL</h3>
+          <p>“NoSQL” started life as a <strong>catchy Twitter hashtag for a 2009 meetup on open source, distributed, nonrelational databases</strong> — then was retroactively reinterpreted as “Not Only SQL.” The name struck a nerve and spread through the web startup community and beyond. Four forces drove the adoption:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">i.</span><div><h4>Scalability</h4><p>Very large datasets or very high write throughput, beyond what relational databases could easily achieve.</p></div></div>
+            <div class="num-card"><span class="n">ii.</span><div><h4>Free &amp; open source</h4><p>A widespread preference for open source over commercial database products.</p></div></div>
+            <div class="num-card"><span class="n">iii.</span><div><h4>Specialized queries</h4><p>Operations not well supported by the relational model.</p></div></div>
+            <div class="num-card"><span class="n">iv.</span><div><h4>Schema frustration</h4><p>Restrictive relational schemas; a desire for a more dynamic, expressive data model.</p></div></div>
+          </div>
+          <p>Notice that relational databases aren’t going anywhere either — the realistic future is <strong>polyglot persistence</strong>: relational and nonrelational datastores used side by side, each where it fits.</p>
+
+          <h3 id="s-mismatch">The object-relational mismatch</h3>
+          <div class="callout">
+            <p class="callout-title">Impedance mismatch — a term from electronics</p>
+            <p>Every circuit has an impedance on its inputs and outputs; power transfers best when they match, and a mismatch causes signal reflections and other troubles. In databases, the <strong>impedance mismatch</strong> is the disconnect between object-oriented application code and the relational model of tables, rows, and columns. ORMs like <strong>ActiveRecord</strong> and <strong>Hibernate</strong> reduce the boilerplate but can’t hide the difference between the two models.</p>
+          </div>
+
+          <h4>Case study: the résumé</h4>
+          <p>Take a LinkedIn profile (Figure 2-1 in the book uses Bill Gates as the example). The profile has <code>first_name</code> and <code>last_name</code> — one value per user, so they become <strong>columns</strong> on a <code>users</code> table, identified by a unique <code>user_id</code>. But positions, education, and contact information are <strong>one-to-many relationships</strong> — and SQL gives you three ways to represent them:</p>
+          <ol>
+            <li><strong>Traditional normalized SQL</strong> (pre-SQL:1999, still the most common): separate tables — <code>positions</code>, <code>education</code>, <code>contact_info</code> — each with a foreign key to <code>users</code>.</li>
+            <li><strong>Later SQL standards</strong> (SQL:1999+): structured datatypes and XML; multi-valued data within a single row, queryable and indexable. Supported by Oracle, IBM DB2, MS SQL Server, PostgreSQL; JSON datatypes arrived in IBM DB2, MySQL, and PostgreSQL.</li>
+            <li><strong>Encode as JSON/XML in a text column</strong> and let the application interpret it — but the database usually can’t query inside the encoded blob.</li>
+          </ol>
+          <p>Option 3 is basically a hand-rolled document model — so the document databases made it first-class. Example 2-1, the profile as a JSON document:</p>
+          <div class="code-block">{
+  "user_id":     251,
+  "first_name":  "Bill",
+  "last_name":   "Gates",
+  "summary":     "Co-chair of the Bill &amp; Melinda Gates... Active blogger.",
+  "region_id":   "us:91",
+  "industry_id": 131,
+  "photo_url":   "/p/7/000/253/05b/308dd6e.jpg",
+  "positions": [
+    {"job_title": "Co-chair", "organization": "Bill &amp; Melinda Gates Foundation"},
+    {"job_title": "Co-founder, Chairman", "organization": "Microsoft"}
+  ],
+  "education": [
+    {"school_name": "Harvard University",       "start": 1973, "end": 1975},
+    {"school_name": "Lakeside School, Seattle", "start": null, "end": null}
+  ],
+  "contact_info": {
+    "blog":    "http://thegatesnotes.com",
+    "twitter": "http://twitter.com/BillGates"
+  }
+}</div>
+          <p>MongoDB, RethinkDB, CouchDB, and Espresso are built around such documents; JSON is much simpler than XML, which is why it won. The structure underneath is a <strong>tree of one-to-many relationships</strong> — positions, education, and contact info all branch from the profile — and JSON makes that tree explicit:</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 2-2 (recreated) · One-to-many relationships form a tree</p>
+            <svg viewBox="0 0 760 320" role="img" aria-label="A user profile as a tree: user 251 branches into positions, education, and contact info" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#5b6478"/>
+                </marker>
+              </defs>
+              <rect x="290" y="18" width="180" height="56" rx="10" fill="#1a2133" stroke="#f0b35c" stroke-width="1.5"/>
+              <text x="380" y="41" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">user_id: 251</text>
+              <text x="380" y="60" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="11">Bill Gates</text>
+
+              <line x1="380" y1="74" x2="145" y2="140" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr)"/>
+              <line x1="380" y1="74" x2="380" y2="140" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr)"/>
+              <line x1="380" y1="74" x2="615" y2="140" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr)"/>
+
+              <rect x="65" y="140" width="160" height="40" rx="9" fill="#151c30" stroke="#2b3859"/>
+              <text x="145" y="165" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="12">positions[]</text>
+              <rect x="300" y="140" width="160" height="40" rx="9" fill="#151c30" stroke="#2b3859"/>
+              <text x="380" y="165" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="12">education[]</text>
+              <rect x="535" y="140" width="160" height="40" rx="9" fill="#151c30" stroke="#2b3859"/>
+              <text x="615" y="165" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="12">contact_info</text>
+
+              <line x1="145" y1="180" x2="100" y2="240" stroke="#2b3859" stroke-width="1.2" marker-end="url(#arr)"/>
+              <line x1="145" y1="180" x2="200" y2="240" stroke="#2b3859" stroke-width="1.2" marker-end="url(#arr)"/>
+              <rect x="40" y="240" width="150" height="56" rx="9" fill="#0f1420" stroke="#1e2740"/>
+              <text x="115" y="263" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10.5">Co-chair, Gates Fdn.</text>
+              <text x="115" y="280" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10">job_title · organization</text>
+              <rect x="205" y="240" width="150" height="56" rx="9" fill="#0f1420" stroke="#1e2740"/>
+              <text x="280" y="263" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10.5">Co-founder, MSFT</text>
+              <text x="280" y="280" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10">job_title · organization</text>
+
+              <line x1="380" y1="180" x2="340" y2="240" stroke="#2b3859" stroke-width="1.2" marker-end="url(#arr)"/>
+              <line x1="380" y1="180" x2="430" y2="240" stroke="#2b3859" stroke-width="1.2" marker-end="url(#arr)"/>
+              <rect x="270" y="240" width="145" height="56" rx="9" fill="#0f1420" stroke="#1e2740"/>
+              <text x="342" y="263" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10.5">Harvard 1973–75</text>
+              <text x="342" y="280" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10">school · start · end</text>
+              <rect x="432" y="240" width="145" height="56" rx="9" fill="#0f1420" stroke="#1e2740"/>
+              <text x="504" y="263" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10.5">Lakeside School</text>
+              <text x="504" y="280" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10">school · start · end</text>
+
+              <line x1="615" y1="180" x2="580" y2="240" stroke="#2b3859" stroke-width="1.2" marker-end="url(#arr)"/>
+              <line x1="615" y1="180" x2="655" y2="240" stroke="#2b3859" stroke-width="1.2" marker-end="url(#arr)"/>
+              <rect x="512" y="240" width="130" height="56" rx="9" fill="#0f1420" stroke="#1e2740"/>
+              <text x="577" y="272" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10.5">blog</text>
+              <rect x="662" y="240" width="130" height="56" rx="9" fill="#0f1420" stroke="#1e2740"/>
+              <text x="727" y="272" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10.5">twitter</text>
+            </svg>
+            <p class="fig-caption">The one-to-many relationships from a user profile — positions, education, contact info — imply a tree structure (Figure 2-1’s relational schema would shred this tree across four tables). JSON stores the tree as one document.</p>
+          </div>
+
+          <div class="callout note">
+            <p class="callout-title">Locality — the document model’s home advantage</p>
+            <p>To fetch the profile from the relational schema you need multiple queries (one per table) or a messy multi-way join. In the JSON representation, everything is in one place — <strong>one read, one document</strong>. We return to locality’s <em>limits</em> a few sections down.</p>
+          </div>
+
+          <h3 id="s-many">Many-to-one and many-to-many</h3>
+          <p>Notice what Example 2-1 did <em>not</em> do: it stores <code>region_id</code> and <code>industry_id</code>, not the strings “Greater Seattle Area” and “Philanthropy”. The human-readable names live in standardized lists (drop-downs / autocompleters), and for five good reasons:</p>
+          <ul class="checklist">
+            <li><strong>Consistent style and spelling</strong> across profiles.</li>
+            <li><strong>Avoiding ambiguity</strong> — several cities share a name.</li>
+            <li><strong>Ease of updating</strong> — the name lives in one place; rename once, everywhere (a city renamed by political events doesn’t strand a million stale copies).</li>
+            <li><strong>Localization</strong> — translate the standardized list, and the region displays in the viewer’s language.</li>
+            <li><strong>Better search</strong> — the region list encodes that Seattle is in Washington, so “philanthropists in Washington state” is a real query.</li>
+          </ul>
+          <div class="callout">
+            <p class="callout-title">The rule of thumb behind normalization</p>
+            <p>An <strong>ID has no meaning to humans, so it never needs to change</strong> — even if the thing it identifies changes its name. Anything meaningful to humans <em>may</em> change, and every duplicated copy is write overhead and a consistency risk. Removing that duplication is the key idea behind <strong>normalization</strong>. (The literature distinguishes many normal forms of little practical interest; the rule of thumb is: <em>if you’re duplicating values that could be stored in just one place, the schema is not normalized.</em>)</p>
+          </div>
+          <p>Here’s the rub: normalization requires <strong>many-to-one</strong> relationships (many people in one region), and those don’t fit the document model — they <em>need</em> joins. Relational databases refer to rows by ID and join freely; document databases historically have weak join support, so the join moves into application code as multiple queries.</p>
+          <p>And then the features arrive, and data gets more interconnected:</p>
+          <ul>
+            <li><strong>Organizations and schools as entities</strong> — <code>organization</code> is currently just a string; make it a reference, and each company gets its own page (logo, news feed), and each résumé links to it.</li>
+            <li><strong>Recommendations</strong> — one user writes a recommendation shown on another’s résumé, with the recommender’s name and photo. When the recommender updates their photo, the recommendation must reflect it — so it must <em>reference</em> the author’s profile.</li>
+          </ul>
+          <p>Figure 2-4 in the book draws the result: dotted rectangles around the data that still groups nicely into one document, and arrows (references, requiring joins) reaching out to organizations, schools, and other users. The one-to-many tree became a many-to-many web.</p>
+
+          <h3 id="s-repeating">Are document databases repeating history?</h3>
+          <p>The most popular business database of the 1970s was <strong>IBM’s IMS</strong> (born for stock-keeping in the <em>Apollo space program</em>, first commercially released <strong>1968</strong>, still running on OS/390 mainframes today). IMS used the <strong>hierarchical model</strong>: all data as a tree of records nested within records — much like JSON. It worked well for one-to-many, made many-to-many difficult, and had no joins: developers chose between duplicating data or manually resolving references in application code. The problems of the 1960s and ’70s are, recognizably, the problems of document databases today.</p>
+          <p>Two camps fought the “great debate” of the 1970s over how to fix the hierarchical model:</p>
+
+          <h4>The network model (CODASYL)</h4>
+          <p>Standardized by the Conference on Data Systems Languages, hence the <strong>CODASYL model</strong>. It generalized the hierarchy: a record could have <strong>multiple parents</strong> — one record for the “Greater Seattle Area,” linked from every user living there. But the links weren’t foreign keys; they were more like <strong>pointers stored on disk</strong>. The only way to reach a record was to start at a root and follow a chain of links — an <strong>access path</strong>. Querying meant moving a cursor through the database, iterating over lists of records and following access paths; with multiple paths leading to the same record, the programmer had to keep them all in their head. Even CODASYL committee members admitted it felt like navigating an <strong>n-dimensional data space</strong>.</p>
+          <p>Manual access-path selection made sense for 1970s hardware (tape drives, extremely slow seeks) — but the code was complicated and inflexible, and if you didn’t have a path to the data you wanted, you were stuck. Changing the data model meant rewriting lots of handwritten query code.</p>
+
+          <h4>The relational model — and why it won</h4>
+          <p>Codd’s answer laid all the data in the open: a relation is just a collection of tuples, no labyrinthine nested structures, no access paths. You can read any rows matching an arbitrary condition, look up by key, insert into any table without worrying about foreign-key relationships. The access paths didn’t disappear — they moved into the <strong>query optimizer</strong>, which automatically decides which indexes to use and in which order to execute the query.</p>
+          <div class="callout note">
+            <p class="callout-title">The one-time cost that pays forever</p>
+            <p>You only need to build a query optimizer <strong>once</strong>, and then every application using the database benefits. Without one, it’s easier to hand-code the access path for a particular query than to write a general-purpose optimizer — but the general-purpose solution wins in the long run: want new query patterns? Declare a new index; existing queries automatically use it. The relational model made adding features to applications dramatically easier.</p>
+          </div>
+          <p>And document databases? They reverted to the hierarchical model in exactly one respect — nested records stored within their parent — but for many-to-one and many-to-many, they behave like the relational model: the related item is referenced by a unique identifier (a <strong>foreign key</strong> in relational, a <strong>document reference</strong> in document), resolved at read time by a join or follow-up queries. To date, document databases have not followed CODASYL down the access-path road.</p>
+
+          <h3 id="s-today">Relational versus document databases today</h3>
+          <p>The case for documents: <strong>schema flexibility</strong>, <strong>locality</strong>, and (for some applications) being <strong>closer to the application’s data structures</strong>. The case for relational: better <strong>joins</strong> and better <strong>many-to-one / many-to-many</strong> support.</p>
+          <p>Which leads to simpler code? If your data is document-shaped — a tree of one-to-many, typically loaded whole — the document model fits, and the relational technique of <strong>shredding</strong> it into multiple tables leads to cumbersome schemas. But if your application is full of many-to-many relationships, the document model means denormalizing (and extra code to keep it consistent) or emulating joins in application code — usually <em>slower</em> than a join executed by specialized code inside the database. Highly interconnected data pushes further still: relational is acceptable, but <strong>graph models are the most natural</strong>.</p>
+
+          <h4>Schema flexibility: schema-on-read vs. schema-on-write</h4>
+          <p>“Schemaless” is misleading — the reading code still assumes structure; the schema is <strong>implicit</strong> rather than enforced. The precise terms:</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th></th><th>Schema-on-write (relational)</th><th>Schema-on-read (document)</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Analogy</strong></td><td>Static (compile-time) type checking</td><td>Dynamic (runtime) type checking</td></tr>
+                <tr><td><strong>Enforcement</strong></td><td>Explicit schema; DB rejects non-conforming writes</td><td>Implicit structure; interpreted at read time</td></tr>
+                <tr><td><strong>Change procedure</strong></td><td>Migration: <code>ALTER TABLE</code> + <code>UPDATE</code></td><td>Write new-format docs; handle old formats in read code</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Concretely — renaming <code>name</code> into <code>first_name</code>/<code>last_name</code>. Document approach: new documents get the new fields, and the application patches old ones on read:</p>
+          <div class="code-block">if (user &amp;&amp; user.name &amp;&amp; !user.first_name) {
+    <span class="cm">// Documents written before Dec 8, 2013 don't have first_name</span>
+    user.first_name = user.name.split(" ")[0];
+}</div>
+          <p>Relational approach — a one-time migration:</p>
+          <div class="code-block"><span class="kw">ALTER TABLE</span> users <span class="kw">ADD COLUMN</span> first_name text;
+<span class="kw">UPDATE</span> users <span class="kw">SET</span> first_name = split_part(name, ' ', 1);       <span class="cm">-- PostgreSQL</span>
+<span class="kw">UPDATE</span> users <span class="kw">SET</span> first_name = substring_index(name, ' ', 1); <span class="cm">-- MySQL</span></div>
+          <p>Most databases execute <code>ALTER TABLE</code> in milliseconds; <strong>MySQL is the notable exception</strong>, copying the entire table — minutes or hours of downtime on a large table (though tools like pt-online-schema-change and gh-ost work around it). The <code>UPDATE</code> is slow everywhere if the table is big; the alternative is leaving <code>first_name</code> NULL and filling it at read time. Schema-on-read shines when items in a collection are <em>heterogeneous</em> — many object types, or structure dictated by external systems you don’t control; when all records share a structure, an enforced schema is a useful document.</p>
+
+          <h4>Data locality for queries</h4>
+          <p>A document is stored as a <strong>single continuous string</strong> (JSON, XML, or a binary variant like MongoDB’s BSON). If you usually need the whole document, that’s a performance win over multiple index lookups across tables. The limits:</p>
+          <ul>
+            <li>The advantage only applies when you need <em>large parts</em> of the document at once.</li>
+            <li>The DB loads the <strong>entire document</strong> even when you touch a small part of it — wasteful for big documents.</li>
+            <li>An update <strong>rewrites the whole document</strong> (only size-neutral edits can happen in place) — hence the advice to keep documents small.</li>
+          </ul>
+          <p>Locality isn’t a document-model monopoly: Google <strong>Spanner</strong> lets a table’s rows be interleaved within a parent table, Oracle has multi-table index cluster tables, and the <strong>Bigtable</strong> model (Cassandra, HBase) has column-families for the same purpose.</p>
+
+          <h4>Convergence</h4>
+          <p>Relational databases added XML (mid-2000s) and JSON (PostgreSQL 9.3, MySQL 5.7, IBM DB2 10.5); RethinkDB added relational-style joins; MongoDB drivers resolve database references client-side. The models are converging — and that’s a good thing: they complement each other, and a hybrid is a good route for the future. (Codd’s original paper even allowed nested relations within a schema — “nonsimple domains” — JSON-in-SQL thirty years early.)</p>
+        </section>
+
+        <!-- ================= 2.2 ================= -->
+        <section class="block reveal" id="s-query">
+          <p class="kicker">2.2 <span class="dim">·</span> How you ask</p>
+          <h2>Query languages for data</h2>
+
+          <h3 id="s-declarative">Declarative versus imperative</h3>
+          <p>When the relational model arrived, it brought a new way of querying. SQL is <strong>declarative</strong>; IMS and CODASYL queried with <strong>imperative</strong> code. The difference, with a marine-biology dataset — find the sharks:</p>
+          <div class="code-block"><span class="cm">// Imperative: you tell the computer the order of operations</span>
+function getSharks() {
+    var sharks = [];
+    for (var i = 0; i &lt; animals.length; i++) {
+        if (animals[i].family === "Sharks") {
+            sharks.push(animals[i]);
+        }
+    }
+    return sharks;
+}</div>
+          <p>The relational algebra is one line — <code>σfamily="Sharks"(animals)</code> (σ, sigma, is the selection operator) — and SQL follows it closely:</p>
+          <div class="code-block"><span class="kw">SELECT</span> * <span class="kw">FROM</span> animals <span class="kw">WHERE</span> family = 'Sharks';</div>
+          <p>You specify the <strong>pattern of the data you want</strong> — conditions, sort, grouping, aggregation — <em>not how to achieve it</em>. The query optimizer picks indexes, join order, and execution plan. Three reasons this wins:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">i.</span><div><h4>Concise</h4><p>Easier to work with than an imperative API.</p></div></div>
+            <div class="num-card"><span class="n">ii.</span><div><h4>Hides implementation</h4><p>The engine can improve performance — or reshuffle records — without changing queries. Imperative code might secretly depend on record order, so the DB can never be sure it’s safe to optimize.</p></div></div>
+            <div class="num-card"><span class="n">iii.</span><div><h4>Parallelizable</h4><p>CPUs get faster by adding cores, not clocks. An imperative program pins operations to an order; a declarative query specifies only the result pattern, leaving the database free to run it in parallel across cores and machines.</p></div></div>
+          </div>
+
+          <h4>The same lesson, in a browser</h4>
+          <p>A web page about ocean animals, with the current section highlighted via <code>class="selected"</code>. Declaratively, in CSS:</p>
+          <div class="code-block">li.selected &gt; p {
+    background-color: blue;
+}</div>
+          <p>Imperatively, in JavaScript DOM manipulation:</p>
+          <div class="code-block">var liElements = document.getElementsByTagName("li");
+for (var i = 0; i &lt; liElements.length; i++) {
+    if (liElements[i].className === "selected") {
+        var children = liElements[i].childNodes;
+        for (var j = 0; j &lt; children.length; j++) {
+            var child = children[j];
+            if (child.nodeType === Node.ELEMENT_NODE &amp;&amp; child.tagName === "P") {
+                child.setAttribute("style", "background-color: blue");
+            }
+        }
+    }
+}</div>
+          <p>The imperative version has two failure modes the declarative one can’t have: remove the <code>selected</code> class and the manual blue stays stuck until reload (CSS removes it automatically), and you can’t benefit from faster new APIs (<code>getElementsByClassName</code>, <code>document.evaluate</code>) without rewriting (browser vendors can optimize CSS and XPath without breaking anyone). CSS is to the DOM what SQL is to the database.</p>
+
+          <h3 id="s-mapreduce">MapReduce querying</h3>
+          <p><strong>MapReduce</strong> (popularized by Google) is a programming model for processing large amounts of data in bulk across many machines — and a limited form is supported by some NoSQL stores (MongoDB, CouchDB) as a read-query mechanism. It sits <em>between</em> declarative and imperative: you supply code snippets that the framework calls repeatedly, based on the <strong>map</strong> (aka <em>collect</em>) and <strong>reduce</strong> (aka <em>fold</em>/<em>inject</em>) functions from functional programming.</p>
+          <p>Count sharks observed per month. In PostgreSQL:</p>
+          <div class="code-block"><span class="kw">SELECT</span> date_trunc('month', observation_timestamp) <span class="kw">AS</span> observation_month,
+       sum(num_animals) <span class="kw">AS</span> total_animals
+<span class="kw">FROM</span> observations
+<span class="kw">WHERE</span> family = 'Sharks'
+<span class="kw">GROUP BY</span> observation_month;</div>
+          <p>In MongoDB’s MapReduce:</p>
+          <div class="code-block">db.observations.mapReduce(
+    function map() {
+        var year  = this.observationTimestamp.getFullYear();
+        var month = this.observationTimestamp.getMonth() + 1;
+        emit(year + "-" + month, this.numAnimals);
+    },
+    function reduce(key, values) {
+        return Array.sum(values);
+    },
+    {
+        query: { family: "Sharks" },
+        out: "monthlySharkReport"
+    }
+);</div>
+          <p>With two observation documents (Dec 25 1995: 3 great whites; Dec 12 1995: 4 sand tigers), <code>map</code> runs once per document — <code>emit("1995-12", 3)</code>, <code>emit("1995-12", 4)</code> — and <code>reduce</code> runs per key: <code>reduce("1995-12", [3, 4])</code> → <strong>7</strong>. The map and reduce functions must be <strong>pure</strong>: only their inputs, no extra database queries, no side effects — which is what lets the framework run them anywhere, in any order, and rerun them on failure.</p>
+          <div class="callout">
+            <p class="callout-title">The moral: NoSQL reinventing SQL, in disguise</p>
+            <p>Coordinating two JavaScript functions is harder than writing one query, and the optimizer has less to work with. MongoDB 2.2 accordingly added the <strong>aggregation pipeline</strong> — a declarative language for the same job:</p>
+          </div>
+          <div class="code-block">db.observations.aggregate([
+    { $match: { family: "Sharks" } },
+    { $group: {
+        _id: {
+            year:  { $year:  "$observationTimestamp" },
+            month: { $month: "$observationTimestamp" }
+        },
+        totalAnimals: { $sum: "$numAnimals" }
+    } }
+]);</div>
+          <p>Similar expressiveness to a subset of SQL with JSON syntax instead of English-sentence syntax — a matter of taste. The takeaway stands: <strong>a NoSQL system may find itself accidentally reinventing SQL, albeit in disguise.</strong></p>
+        </section>
+
+        <!-- ================= 2.3 ================= -->
+        <section class="block reveal" id="s-graph">
+          <p class="kicker">2.3 <span class="dim">·</span> When everything relates to everything</p>
+          <h2>Graph-like data models</h2>
+          <p>When many-to-many relationships are <em>very</em> common, model the data as a <strong>graph</strong>: <strong>vertices</strong> (nodes, entities) and <strong>edges</strong> (relationships, arcs). The classics: social graphs (people who know people), the web graph (pages linking to pages), road and rail networks (junctions and the roads between them — shortest-path search). Algorithms like <strong>PageRank</strong> on the web graph made a search engine a monopoly. Graphs also homogenize heterogeneity — Facebook’s single graph holds people, locations, events, checkins, and comments as vertices, with friendships, checkin-locations, and comment-authorship as edges.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 2-5 (recreated) · Lucy and Alain</p>
+            <svg viewBox="0 0 780 420" role="img" aria-label="Graph: Lucy born in Idaho lives in London; Alain born in Beaune, France lives in London; they are married; locations nest within countries and continents" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#5b6478"/>
+                </marker>
+              </defs>
+              <!-- people -->
+              <rect x="70" y="80" width="130" height="46" rx="10" fill="rgba(99,223,194,0.09)" stroke="#63dfc2"/>
+              <text x="135" y="109" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="13">Lucy :Person</text>
+              <rect x="70" y="300" width="130" height="46" rx="10" fill="rgba(99,223,194,0.09)" stroke="#63dfc2"/>
+              <text x="135" y="329" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="13">Alain :Person</text>
+              <!-- locations -->
+              <rect x="330" y="40" width="120" height="40" rx="9" fill="#151c30" stroke="#2b3859"/>
+              <text x="390" y="65" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="12">Idaho</text>
+              <rect x="330" y="300" width="120" height="40" rx="9" fill="#151c30" stroke="#2b3859"/>
+              <text x="390" y="325" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="12">Beaune</text>
+              <rect x="330" y="175" width="120" height="40" rx="9" fill="#151c30" stroke="#2b3859"/>
+              <text x="390" y="200" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="12">London</text>
+              <rect x="560" y="40" width="120" height="40" rx="9" fill="#151c30" stroke="#2b3859"/>
+              <text x="620" y="65" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="12">USA</text>
+              <rect x="560" y="300" width="120" height="40" rx="9" fill="#151c30" stroke="#2b3859"/>
+              <text x="620" y="325" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="12">France</text>
+              <rect x="560" y="175" width="120" height="40" rx="9" fill="#151c30" stroke="#2b3859"/>
+              <text x="620" y="200" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="12">UK</text>
+              <rect x="700" y="40" width="70" height="40" rx="9" fill="#151c30" stroke="#1e2740"/>
+              <text x="735" y="65" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10.5">N. America</text>
+              <rect x="700" y="238" width="70" height="40" rx="9" fill="#151c30" stroke="#1e2740"/>
+              <text x="735" y="263" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="11">Europe</text>
+              <!-- edges -->
+              <line x1="200" y1="95" x2="330" y2="65" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr2)"/>
+              <text x="245" y="62" fill="#8d97ad" font-family="monospace" font-size="10">born_in</text>
+              <line x1="200" y1="110" x2="330" y2="185" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr2)"/>
+              <text x="228" y="168" fill="#8d97ad" font-family="monospace" font-size="10">lives_in</text>
+              <line x1="135" y1="126" x2="135" y2="300" stroke="#f0b35c" stroke-width="1.5" stroke-dasharray="5 4"/>
+              <text x="22" y="218" fill="#f0b35c" font-family="monospace" font-size="10">married_to</text>
+              <line x1="200" y1="323" x2="330" y2="323" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr2)"/>
+              <text x="240" y="312" fill="#8d97ad" font-family="monospace" font-size="10">born_in</text>
+              <line x1="200" y1="315" x2="330" y2="212" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr2)"/>
+              <text x="228" y="252" fill="#8d97ad" font-family="monospace" font-size="10">lives_in</text>
+              <line x1="450" y1="60" x2="560" y2="60" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr2)"/>
+              <text x="487" y="50" fill="#8d97ad" font-family="monospace" font-size="10">within</text>
+              <line x1="450" y1="320" x2="560" y2="320" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr2)"/>
+              <text x="487" y="310" fill="#8d97ad" font-family="monospace" font-size="10">within</text>
+              <line x1="450" y1="195" x2="560" y2="195" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr2)"/>
+              <text x="487" y="185" fill="#8d97ad" font-family="monospace" font-size="10">within</text>
+              <line x1="680" y1="60" x2="700" y2="58" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr2)"/>
+              <line x1="680" y1="315" x2="700" y2="272" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr2)"/>
+              <line x1="680" y1="195" x2="700" y2="240" stroke="#5b6478" stroke-width="1.5" marker-end="url(#arr2)"/>
+              <text x="640" y="152" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10">(both live in London, UK)</text>
+            </svg>
+            <p class="fig-caption">Lucy (born in Idaho) and Alain (born in Beaune, France), married and living in London — expressible as a social graph or a genealogical database. Note the graph eating things a rigid relational schema chokes on: France has <em>départements and régions</em>, the US has <em>counties and states</em>; Lucy’s residence is known to city level but her birthplace only to state.</p>
+          </div>
+
+          <h3 id="s-property">The property graph model</h3>
+          <p>Used by <strong>Neo4j, Titan, InfiniteGraph</strong>. A vertex has: a unique identifier, a set of outgoing edges, a set of incoming edges, and a collection of properties (key-value pairs). An edge has: a unique identifier, the <strong>tail vertex</strong> (where it starts), the <strong>head vertex</strong> (where it ends), a <strong>label</strong> describing the relationship, and its own properties. In fact you can think of a graph store as <strong>two relational tables</strong> — Example 2-2:</p>
+          <div class="code-block"><span class="kw">CREATE TABLE</span> vertices (
+    vertex_id   integer PRIMARY KEY,
+    properties  json
+);
+
+<span class="kw">CREATE TABLE</span> edges (
+    edge_id     integer PRIMARY KEY,
+    tail_vertex integer REFERENCES vertices (vertex_id),
+    head_vertex integer REFERENCES vertices (vertex_id),
+    label       text,
+    properties  json
+);
+
+<span class="kw">CREATE INDEX</span> edges_tails ON edges (tail_vertex);
+<span class="kw">CREATE INDEX</span> edges_heads ON edges (head_vertex);</div>
+          <p>Three aspects make this model powerful:</p>
+          <ol>
+            <li><strong>Any vertex can have an edge to any other vertex</strong> — no schema restricts which kinds of things can be associated.</li>
+            <li><strong>Given any vertex, you can efficiently find incoming and outgoing edges</strong> (hence the two indexes) and traverse chains forward and backward.</li>
+            <li><strong>Different labels for different relationship kinds</strong> — many kinds of information in one graph, clean model intact.</li>
+          </ol>
+          <p>That flexibility is why graphs are <strong>good for evolvability</strong>: add food allergies later as allergen vertices plus <code>ALLERGIC_TO</code> edges, then query what’s safe for each person to eat — no migration, just more graph.</p>
+
+          <h3 id="s-cypher">Cypher</h3>
+          <p><strong>Cypher</strong> is a declarative query language for property graphs, created for <strong>Neo4j</strong> (named after a character in <em>The Matrix</em>; nothing to do with cryptography). The Figure 2-5 data, as a Cypher <code>CREATE</code>:</p>
+          <div class="code-block">CREATE
+  (NAmerica:Location {name:'North America', type:'continent'}),
+  (USA:Location      {name:'United States', type:'country'  }),
+  (Idaho:Location    {name:'Idaho',         type:'state'    }),
+  (Lucy:Person       {name:'Lucy' }),
+  (Idaho) -[:WITHIN]->  (USA)  -[:WITHIN]-> (NAmerica),
+  (Lucy)  -[:BORN_IN]-> (Idaho)</div>
+          <p>Now the query that defines the model’s value — find people who emigrated from the US to Europe:</p>
+          <div class="code-block"><span class="kw">MATCH</span>
+  (person) -[:BORN_IN]-&gt;  () -[:WITHIN*0..]-&gt; (us:Location {name:'United States'}),
+  (person) -[:LIVES_IN]-&gt; () -[:WITHIN*0..]-&gt; (eu:Location {name:'Europe'})
+<span class="kw">RETURN</span> person.name</div>
+          <p>Read it as: find a <code>person</code> whose <code>BORN_IN</code> edge leads (via a chain of zero or more <code>WITHIN</code> edges) to a location named “United States”, and whose <code>LIVES_IN</code> edge leads (via <code>WITHIN*0..</code>) to one named “Europe”. The <code>*0..</code> is doing enormous work: like the <code>*</code> in a regular expression, it says “this edge, zero or more times” — because <code>LIVES_IN</code> might point at a street, a city, a district, a region, or a state, and we don’t know how many levels up “Europe” sits. You never specify how to execute — scan all people and check, or start from the two Location vertices and work backward through an index on <code>name</code>; the optimizer chooses.</p>
+
+          <h3 id="s-sqlgraph">Graph queries in SQL</h3>
+          <p>Can SQL do this? Yes — with difficulty, using <code>WITH RECURSIVE</code> (SQL:1999; PostgreSQL, DB2, Oracle, SQL Server). The same 4-line Cypher query becomes Example 2-5, 29 lines:</p>
+          <div class="code-block"><span class="kw">WITH RECURSIVE</span>
+  <span class="cm">-- in_usa is the set of vertex IDs of all locations within the United States</span>
+  in_usa(vertex_id) AS (
+      <span class="kw">SELECT</span> vertex_id <span class="kw">FROM</span> vertices <span class="kw">WHERE</span> properties-&gt;&gt;'name' = 'United States'
+    <span class="kw">UNION</span>
+      <span class="kw">SELECT</span> edges.tail_vertex <span class="kw">FROM</span> edges
+        <span class="kw">JOIN</span> in_usa <span class="kw">ON</span> edges.head_vertex = in_usa.vertex_id
+        <span class="kw">WHERE</span> edges.label = 'within'
+  ),
+  <span class="cm">-- in_europe is the set of vertex IDs of all locations within Europe</span>
+  in_europe(vertex_id) AS (
+      <span class="kw">SELECT</span> vertex_id <span class="kw">FROM</span> vertices <span class="kw">WHERE</span> properties-&gt;&gt;'name' = 'Europe'
+    <span class="kw">UNION</span>
+      <span class="kw">SELECT</span> edges.tail_vertex <span class="kw">FROM</span> edges
+        <span class="kw">JOIN</span> in_europe <span class="kw">ON</span> edges.head_vertex = in_europe.vertex_id
+        <span class="kw">WHERE</span> edges.label = 'within'
+  ),
+  <span class="cm">-- born_in_usa is the set of vertex IDs of all people born in the US</span>
+  born_in_usa(vertex_id) AS (
+    <span class="kw">SELECT</span> edges.tail_vertex <span class="kw">FROM</span> edges
+      <span class="kw">JOIN</span> in_usa <span class="kw">ON</span> edges.head_vertex = in_usa.vertex_id
+      <span class="kw">WHERE</span> edges.label = 'born_in'
+  ),
+  <span class="cm">-- lives_in_europe is the set of vertex IDs of all people living in Europe</span>
+  lives_in_europe(vertex_id) AS (
+    <span class="kw">SELECT</span> edges.tail_vertex <span class="kw">FROM</span> edges
+      <span class="kw">JOIN</span> in_europe <span class="kw">ON</span> edges.head_vertex = in_europe.vertex_id
+      <span class="kw">WHERE</span> edges.label = 'lives_in'
+  )
+<span class="kw">SELECT</span> vertices.properties-&gt;&gt;'name'
+<span class="kw">FROM</span> vertices
+<span class="kw">JOIN</span> born_in_usa     <span class="kw">ON</span> vertices.vertex_id = born_in_usa.vertex_id
+<span class="kw">JOIN</span> lives_in_europe <span class="kw">ON</span> vertices.vertex_id = lives_in_europe.vertex_id;</div>
+          <div class="callout warn">
+            <p class="callout-title">4 lines vs. 29 lines</p>
+            <p>If the same query takes 4 lines in one language and 29 in another, that just shows that <strong>different data models are designed for different use cases</strong>. The core mismatch: in SQL you normally know your joins in advance; in a graph query the <em>number of joins is a variable</em>, and recursive CTEs are the sledgehammer that handles it.</p>
+          </div>
+
+          <h3 id="s-triple">Triple-stores and SPARQL</h3>
+          <p>The <strong>triple-store</strong> is mostly the property graph with different words: all data as three-part statements, <strong>(subject, predicate, object)</strong> — e.g. <code>(Jim, likes, bananas)</code>. If the object is a primitive value, the predicate is a property: <code>(lucy, age, 33)</code> ≡ vertex <code>lucy</code> with <code>{"age":33}</code>. If the object is another vertex, the predicate is an edge: <code>(lucy, marriedTo, alain)</code>. Used by <strong>Datomic, AllegroGraph</strong> and others.</p>
+          <p>The Figure 2-5 data in <strong>Turtle</strong> (the human-readable RDF format):</p>
+          <div class="code-block">@prefix : &lt;urn:example:&gt;.
+_:lucy     a :Person;   :name "Lucy";          :bornIn _:idaho.
+_:idaho    a :Location; :name "Idaho";         :type "state";   :within _:usa.
+_:usa      a :Location; :name "United States"; :type "country"; :within _:namerica.
+_:namerica a :Location; :name "North America"; :type "continent".</div>
+          <p>Semicolons let you say several things about one subject — the same data can be written as one triple per line (Example 2-6) or verbose RDF/XML (Example 2-8, best left unvisited). The <code>_:</code> names are just local file-scoped identifiers for vertices.</p>
+          <div class="callout story">
+            <p class="callout-title">A word on the semantic web</p>
+            <p>Triples got famous as <strong>RDF</strong>, the format for the “semantic web” — the idea that websites should publish machine-readable data, combinable into an internet-wide “database of everything.” It was overhyped in the early 2000s and hasn’t materialized, which made many people cynical; the standards effort also produced a dizzying plethora of acronyms and hubris. But look past the failings and there’s real value: triples are a good <em>internal</em> data model, whether or not you publish RDF. (RDF uses URIs for predicates so different organizations can merge data without collisions: <code>urn:example:within</code> vs. <code>http://other.org/foo#within</code>.)</p>
+          </div>
+          <p><strong>SPARQL</strong> — SPARQL Protocol and RDF Query Language, pronounced “sparkle” — is the triple-store query language, and it predates Cypher (which borrowed its pattern matching). The emigration query:</p>
+          <div class="code-block"><span class="kw">PREFIX</span> : &lt;urn:example:&gt;
+<span class="kw">SELECT</span> ?personName <span class="kw">WHERE</span> {
+  ?person :name ?personName.
+  ?person :bornIn  / :within* / :name "United States".
+  ?person :livesIn / :within* / :name "Europe".
+}</div>
+          <p>Compare the notations — Cypher <code>(person) -[:BORN_IN]-> () -[:WITHIN*0..]-> (location)</code> versus SPARQL <code>?person :bornIn / :within* ?location.</code> — and RDF’s simplification of properties: no distinction between properties and edges, just predicates, so <code>{name:'United States'}</code> becomes <code>?usa :name "United States".</code>. SPARQL is a nice language — even if the semantic web never happens.</p>
+
+          <h4>Graph databases vs. the network model — aren’t they CODASYL reborn?</h4>
+          <p>Understandable suspicion, wrong in four ways:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">i.</span><div><h4>Schema</h4><p>CODASYL fixed which record types could nest within which. In a graph, <strong>any vertex can connect to any vertex</strong>.</p></div></div>
+            <div class="num-card"><span class="n">ii.</span><div><h4>Access</h4><p>CODASYL records were reachable only via access paths; graph vertices are addressable <strong>directly by unique ID or via any indexed property</strong>.</p></div></div>
+            <div class="num-card"><span class="n">iii.</span><div><h4>Ordering</h4><p>CODASYL children were an <em>ordered set</em> that the database maintained; graph vertices and edges are <strong>unordered</strong> — sort only at query time.</p></div></div>
+            <div class="num-card"><span class="n">iv.</span><div><h4>Queries</h4><p>CODASYL queries were imperative and broke on schema changes; graphs have <strong>declarative languages</strong> like Cypher and SPARQL (though Gremlin stays imperative; Pregel handles bulk graph processing — Chapter 10).</p></div></div>
+          </div>
+
+          <h3 id="s-datalog">The foundation: Datalog</h3>
+          <p><strong>Datalog</strong> is much older — studied extensively by academics in the <strong>1980s</strong> — and less known among engineers, but important because <em>it is the foundation later query languages build on</em>. It’s the query language of <strong>Datomic</strong>, and <strong>Cascalog</strong> implements it for Hadoop. The data model generalizes triples slightly: write <code>predicate(subject, object)</code>. The facts:</p>
+          <div class="code-block">name(namerica, 'North America').
+type(namerica, continent).
+name(usa, 'United States').
+type(usa, country).
+within(usa, namerica).
+name(idaho, 'Idaho').
+type(idaho, state).
+within(idaho, usa).
+name(lucy, 'Lucy').
+born_in(lucy, idaho).</div>
+          <p>And the emigration query — as <em>rules</em> that define new predicates from existing ones:</p>
+          <div class="code-block">within_recursive(Location, Name) :- name(Location, Name).     <span class="cm">/* Rule 1 */</span>
+within_recursive(Location, Name) :- within(Location, Via),    <span class="cm">/* Rule 2 */</span>
+                                    within_recursive(Via, Name).
+migrated(Name, BornIn, LivingIn) :- name(Person, Name),       <span class="cm">/* Rule 3 */</span>
+                                    born_in(Person, BornLoc),
+                                    within_recursive(BornLoc, BornIn),
+                                    lives_in(Person, LivingLoc),
+                                    within_recursive(LivingLoc, LivingIn).
+?- migrated(Who, 'United States', 'Europe').
+<span class="cm">/* Who = 'Lucy'. */</span></div>
+          <p>Uppercase-initial words are variables; a rule fires when all predicates on the right of <code>:-</code> match, and then the left side becomes true with the bound values. Rule 1 applied to <code>name(namerica, 'North America')</code> generates <code>within_recursive(namerica, 'North America')</code>; rule 2 then cascades — <code>within(usa, namerica)</code> plus the previous result generates <code>within_recursive(usa, 'North America')</code>, and so on down to Idaho. Rules can refer to rules, like functions calling functions — build complex queries a piece at a time, and reuse them. A different kind of thinking; less convenient for one-off queries, but powerful when your data is complex.</p>
+        </section>
+
+        <!-- ================= 2.4 ================= -->
+        <section class="block reveal" id="s-summary">
+          <p class="kicker">2.4 <span class="dim">·</span> Pulling it together</p>
+          <h2>Summary</h2>
+          <div class="callout note">
+            <p class="callout-title">The chapter in one card</p>
+            <p>Data started as <strong>one big tree</strong> (the hierarchical model). That was bad at many-to-many, so the <strong>relational model</strong> won. Some applications don’t fit relational either, so NoSQL split in two directions: <strong>document databases</strong> for self-contained documents with rare cross-links, and <strong>graph databases</strong> for the opposite — anything potentially related to everything. All three are widely used, each best in its domain; one can emulate another, but awkwardly, which is why we have different systems rather than one size fits all. And all three leave the schema question to you: <strong>explicit on write, or implicit on read</strong>.</p>
+          </div>
+
+          <h3>Glossary</h3>
+          <dl class="kv">
+            <div class="kv-row"><dt>impedance mismatch</dt><dd>The disconnect between object-oriented application code and relational tables/rows/columns (term borrowed from electronics, where mismatched circuit impedances cause signal trouble).</dd></div>
+            <div class="kv-row"><dt>normalization</dt><dd>Removing duplication so each piece of information is stored in exactly one place; rule of thumb — if you’re duplicating values that could live in one place, the schema isn’t normalized.</dd></div>
+            <div class="kv-row"><dt>shredding</dt><dd>Splitting a document-like structure into multiple relational tables (positions, education, contact_info…).</dd></div>
+            <div class="kv-row"><dt>schema-on-read</dt><dd>Structure is implicit, interpreted at read time — like dynamic type checking.</dd></div>
+            <div class="kv-row"><dt>schema-on-write</dt><dd>Explicit schema enforced at write time — like static type checking.</dd></div>
+            <div class="kv-row"><dt>document reference</dt><dd>The document-model equivalent of a relational foreign key.</dd></div>
+            <div class="kv-row"><dt>NoSQL</dt><dd>Originally a Twitter hashtag for a 2009 meetup on open-source, distributed, nonrelational databases; retroactively “Not Only SQL”.</dd></div>
+            <div class="kv-row"><dt>polyglot persistence</dt><dd>Relational and nonrelational datastores used side by side, each where it fits.</dd></div>
+            <div class="kv-row"><dt>hierarchical model</dt><dd>IBM IMS’s model (1968): all data as a tree of records nested in records — like JSON, one-to-many friendly, many-to-many hostile.</dd></div>
+            <div class="kv-row"><dt>network model (CODASYL)</dt><dd>Generalization where records can have multiple parents, linked by disk-stored pointers; querying meant following access paths with a cursor.</dd></div>
+            <div class="kv-row"><dt>access path</dt><dd>In CODASYL, the chain of links you had to follow from a root record to reach the data — chosen by the programmer.</dd></div>
+            <div class="kv-row"><dt>query optimizer</dt><dd>The component that chooses indexes, join order, and execution plan — access paths made automatic.</dd></div>
+            <div class="kv-row"><dt>declarative / imperative</dt><dd>Declarative (SQL, CSS, XPath): specify the pattern of results. Imperative (CODASYL, DOM scripting): specify the operations, in order.</dd></div>
+            <div class="kv-row"><dt>MapReduce</dt><dd>Bulk-processing model built on pure map and reduce functions; in-between declarative and imperative.</dd></div>
+            <div class="kv-row"><dt>aggregation pipeline</dt><dd>MongoDB 2.2’s declarative query language — “NoSQL reinventing SQL, in disguise”.</dd></div>
+            <div class="kv-row"><dt>property graph</dt><dd>Vertices + edges, both with unique IDs and property maps; edges have tail, head, and label.</dd></div>
+            <div class="kv-row"><dt>triple-store</dt><dd>Everything as (subject, predicate, object) triples; objects are either primitive values (properties) or other vertices (edges).</dd></div>
+            <div class="kv-row"><dt>RDF / Turtle</dt><dd>Resource Description Framework — machine-readable data for the semantic web; Turtle is its human-readable format.</dd></div>
+            <div class="kv-row"><dt>SPARQL</dt><dd>“Sparkle” — the RDF query language; Cypher’s pattern matching was borrowed from it.</dd></div>
+            <div class="kv-row"><dt>Datalog</dt><dd>1980s logic-programming query language; queries as rules that derive new predicates, composable and reusable.</dd></div>
+            <div class="kv-row"><dt>recursive CTE</dt><dd>SQL:1999’s <code>WITH RECURSIVE</code> — how SQL handles variable-length traversals (29 lines at a time).</dd></div>
+          </dl>
+
+          <h3>Further reading</h3>
+          <ul class="reading-list">
+            <li><strong>Edgar F. Codd, “A Relational Model of Data for Large Shared Data Banks”</strong><span class="src">Communications of the ACM, June 1970 — the founding paper</span></li>
+            <li><strong>Stonebraker &amp; Hellerstein, “What Goes Around Comes Around”</strong><span class="src">Readings in Database Systems, 4th ed., MIT Press 2005 — the recurring challengers to the relational model</span></li>
+            <li><strong>Sadalage &amp; Fowler, NoSQL Distilled</strong><span class="src">Addison-Wesley, 2012 — polyglot persistence and the NoSQL landscape</span></li>
+            <li><strong>Sarah Mei, “Why You Should Never Use MongoDB”</strong><span class="src">sarahmei.com, November 2013 — the many-to-many trap in document modeling</span></li>
+            <li><strong>Bronson et al., “TAO: Facebook’s Distributed Data Store for the Social Graph”</strong><span class="src">USENIX ATC 2013 — a real social graph at scale</span></li>
+            <li><strong>Hellerstein, “The Declarative Imperative”</strong><span class="src">UC Berkeley tech report, 2010 — why declarative languages parallelize</span></li>
+          </ul>
+        </section>
+
+        <!-- ================= quiz ================= -->
+        <section class="quiz-wrap" id="quiz-section">
+          <div class="quiz-head">
+            <div>
+              <p class="kicker">Check yourself <span class="dim">· 12 questions</span></p>
+              <h2>Chapter 2 quiz</h2>
+              <p>Two written, ten multiple-choice — models, history, and languages.</p>
+            </div>
+            <span class="chip" id="quiz-last">no score yet</span>
+          </div>
+          <div id="quiz"></div>
+          <button class="mark-complete" id="mark-complete" type="button">Mark chapter complete</button>
+        </section>
+
+        <nav class="lesson-pager">
+          <a class="pager-link" href="chapter1.html">
+            <span class="dir">← Previous</span>
+            <span class="title">Reliable, Scalable, Maintainable Applications</span>
+          </a>
+          <a class="pager-link next" href="chapter3.html">
+            <span class="dir">Next chapter →</span>
+            <span class="title">Storage and Retrieval</span>
+          </a>
+        </nav>
+
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container foot-inner">
+      <p>DDIA practice companion · a fan-made study aid for<br>“Designing Data-Intensive Applications” by Martin Kleppmann (O’Reilly)</p>
+      <p>static site · no trackers · progress in localStorage</p>
+    </div>
+  </footer>
+
+  <script>
+    window.QUIZ = {
+      lesson: 'chapter2',
+      questions: [
+        {
+          q: 'Your app stores résumé-style documents — positions, education, contact info — always loaded whole, with rare cross-document references. Document or relational model, and what is the specific advantage? Reason it out, then reveal.',
+          short: true,
+          answer: 'Document model. The data is a tree of one-to-many relationships loaded at once, so locality wins: the whole record arrives in one read, with no shredding across multiple tables and no join to reassemble it. Cross-references being rare means weak join support doesn’t hurt.'
+        },
+        {
+          q: 'CODASYL worked and was standardized — so why did the relational model win the great debate? Explain the access-path argument, then reveal.',
+          short: true,
+          answer: 'In CODASYL, the only way to reach a record was to follow an access path that the programmer chose and hardcoded — change the data model and you rewrote all the query code. The relational model lays data in the open and moves access-path selection into the query optimizer, chosen automatically per query. You build the optimizer once and every application benefits forever; new query patterns just need a new index, not new code.'
+        },
+        {
+          q: 'Why store region_id (a many-to-one reference) instead of the region name in every profile?',
+          options: [
+            'Integer IDs compress better than text',
+            'Normalization: the ID has no meaning to humans, so it never needs to change — the name lives in one authoritative place, updated once, localized per viewer, and searchable by hierarchy',
+            'Document databases cannot index strings',
+            'It makes the JSON parse faster'
+          ],
+          answer: 1,
+          why: 'IDs are meaningless to humans, so they never change; names do. One authoritative home gives consistent spelling, no ambiguity, one-place updates, localization, and better search (the region list knows Seattle is in Washington).'
+        },
+        {
+          q: 'Schema-on-read vs. schema-on-write — which statement is wrong?',
+          options: [
+            'Schema-on-write is like static type checking; schema-on-read is like dynamic type checking',
+            'Schema-on-read suits heterogeneous collections whose structure is controlled by external systems',
+            'Adding a field under schema-on-read can be done by writing new documents with the field and handling old documents in read code',
+            'Schema-on-read means the data has no structure at all — the application makes no assumptions about it'
+          ],
+          answer: 3,
+          why: '“Schemaless” is misleading: reading code still assumes a structure — the schema is implicit, just not enforced by the database. That’s the difference between implicit and absent, not between flexible and structureless.'
+        },
+        {
+          q: 'Which database is the notorious exception to “ALTER TABLE takes milliseconds”?',
+          options: [
+            'PostgreSQL, which requires superuser rights',
+            'Oracle, which recompiles all stored procedures',
+            'MySQL, which copies the entire table and can mean minutes-to-hours of downtime on large tables',
+            'SQLite, which locks the whole file'
+          ],
+          answer: 2,
+          why: 'MySQL copies the entire table on ALTER TABLE — minutes or even hours on large tables, though tools like pt-online-schema-change and gh-ost work around it.'
+        },
+        {
+          q: 'A document database loads your 2 MB document even though you updated one small field — and the update rewrites the whole document. What limitation is this?',
+          options: [
+            'The access-path problem from CODASYL',
+            'The limit of data locality: the win only applies when you need large parts of the document; partial access wastes I/O, and any update that changes the document’s encoded size rewrites it entirely',
+            'Impedance mismatch between the document and the application objects',
+            'A missing index on the updated field'
+          ],
+          answer: 1,
+          why: 'Locality cuts both ways: the DB loads the entire document even for small accesses, and updates usually rewrite the whole document. Hence the advice — keep documents small and avoid writes that grow them.'
+        },
+        {
+          q: 'Why do declarative query languages lend themselves to parallel execution better than imperative ones?',
+          options: [
+            'They compile to machine code automatically',
+            'They specify only the pattern of results, not the algorithm — so the database is free to run the query in parallel across cores and machines, while imperative code pins operations to a particular order',
+            'Declarative languages run in the database kernel instead of user space',
+            'They use fewer system calls'
+          ],
+          answer: 1,
+          why: 'Imperative code specifies instructions in a particular order — very hard to parallelize. Declarative queries specify only the result pattern, leaving the database free to choose a parallel implementation. Relevant because CPUs now get faster by adding cores, not clocks.'
+        },
+        {
+          q: 'Why must MapReduce map and reduce functions be pure (no side effects, no extra queries, only their inputs)?',
+          options: [
+            'To keep the query language declarative',
+            'So the framework can run them anywhere, in any order, and re-run them on failure — purity is what makes distribution and retries safe',
+            'Because JavaScript is single-threaded',
+            'To prevent injection attacks'
+          ],
+          answer: 1,
+          why: 'Purity lets the framework schedule the functions anywhere in the cluster, in any order, and rerun them after failures — they can’t corrupt anything because they touch nothing but their inputs.'
+        },
+        {
+          q: 'MongoDB 2.2 added the aggregation pipeline for the shark-counting query. What does that addition demonstrate?',
+          options: [
+            'That MapReduce was faster than expected',
+            'That a NoSQL system may find itself accidentally reinventing SQL, albeit in disguise — the pipeline has similar expressiveness to a subset of SQL, with JSON syntax instead of English sentences',
+            'That MongoDB abandoned JavaScript',
+            'That SQL cannot express GROUP BY'
+          ],
+          answer: 1,
+          why: 'The aggregation pipeline is a declarative language as expressive as a subset of SQL — coordinated map/reduce function pairs were harder to write and gave the optimizer less room. NoSQL reinventing SQL, in disguise.'
+        },
+        {
+          q: 'A property graph represented as two relational tables has indexes on BOTH tail_vertex and head_vertex. Why both?',
+          options: [
+            'One is a backup in case the other is corrupted',
+            'So that given any vertex you can efficiently find both its incoming and outgoing edges — enabling traversal forward and backward from anywhere in the graph',
+            'Because edges are stored twice for durability',
+            'To enforce that every edge has two endpoints'
+          ],
+          answer: 1,
+          why: 'Traversal is the whole game: the tail index answers “what edges leave this vertex?”, the head index answers “what edges point at it?”. Together they let you walk chains in either direction.'
+        },
+        {
+          q: 'In Cypher, what does WITHIN*0.. accomplish that plain SQL struggles with?',
+          options: [
+            'It sorts the WITHIN edges by recency',
+            'It follows a WITHIN edge zero or more times — a variable-length path, like * in a regex — because you don’t know how many levels separate a city from the continent you’re matching',
+            'It caches the traversal for future queries',
+            'It makes the query deterministic'
+          ],
+          answer: 1,
+          why: 'LIVES_IN may point at a street, city, district, region, or state — the number of hops to “Europe” is a variable. WITHIN*0.. expresses that in a few characters; SQL needs WITH RECURSIVE and 29 lines.'
+        },
+        {
+          q: '“Aren’t graph databases just CODASYL reborn?” — which difference kills the comparison?',
+          options: [
+            'Graph databases store edges on disk; CODASYL stored them in memory',
+            'Graph vertices are directly addressable by unique ID or searchable by indexed property, while CODASYL records were reachable only by traversing hand-picked access paths',
+            'CODASYL had better query optimizers',
+            'Graph databases require a fixed schema; CODASYL did not'
+          ],
+          answer: 1,
+          why: 'In CODASYL you could only reach a record by following an access path the programmer chose. In a graph you can jump straight to any vertex by ID or index — plus any vertex can connect to any other, vertices are unordered, and the languages are declarative.'
+        }
+      ]
+    };
+  </script>
+  <script src="../js/shared.js"></script>
+  <script src="../js/quiz.js"></script>
+  <script src="../js/toc.js"></script>
+</body>
+</html>

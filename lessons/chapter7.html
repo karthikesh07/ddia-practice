@@ -1,0 +1,1094 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chapter 7 · Transactions — DDIA Practice</title>
+  <meta name="description" content="A comprehensive study guide to Chapter 7 of Designing Data-Intensive Applications: ACID, weak isolation levels, dirty reads and writes, snapshot isolation and MVCC, lost updates, write skew and phantoms, and serializability via serial execution, two-phase locking, and SSI.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d14'/%3E%3Cpath d='M16 6l9 10-9 10-9-10z' fill='%23f0b35c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Spline+Sans:wght@300..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
+  
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-active="lessons" class="is-lesson">
+
+  <div class="reading-progress" id="readingProgress" aria-hidden="true"></div>
+
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="../index.html">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <rect x="1" y="2" width="16" height="4" rx="1.5" stroke="#f0b35c" stroke-width="1.6"/>
+          <rect x="1" y="7" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+          <rect x="1" y="12" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+        </svg>
+        DDIA&nbsp;<span class="dim">/ practice</span>
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="../index.html" data-nav="home">Home</a>
+        <a href="../index.html#lessons" data-nav="lessons">Lessons</a>
+        <a href="../flashcards.html" data-nav="flashcards">Flashcards</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+
+    <div class="lesson-hero">
+      <span class="lesson-hero-num" aria-hidden="true">7</span>
+      <div class="container">
+        <a class="crumb" href="../index.html#lessons">← All chapters</a>
+        <p class="kicker">Chapter 07 <span class="dim">· Part II — Distributed Data</span></p>
+        <h1>Transactions</h1>
+        <p class="lede">A way to group several reads and writes into one logical unit — so the application can pretend that certain faults and race conditions don’t exist.</p>
+        <div class="lesson-meta">
+          <span class="chip">ACID</span>
+          <span class="chip">Weak isolation</span>
+          <span class="chip">Write skew &amp; phantoms</span>
+          <span class="chip">2PL &amp; SSI</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pullquote container">
+      <p>“It is better to have application programmers deal with performance problems due to overuse of transactions as bottlenecks arise, rather than always coding around the lack of transactions.”</p>
+      <cite>— James Corbett et al., Spanner: Google’s Globally-Distributed Database (2012)</cite>
+    </div>
+
+    <div class="chapter-layout container">
+
+      <aside class="toc" aria-label="Chapter contents">
+        <p class="toc-title">Ch 7 contents</p>
+        <ul>
+          <li><a href="#s-intro">7.0 The slippery concept</a></li>
+          <li><a href="#s-acid" class="sub">The meaning of ACID</a></li>
+          <li><a href="#s-durability" class="sub">Replication &amp; durability</a></li>
+          <li><a href="#s-objects" class="sub">Single- &amp; multi-object ops</a></li>
+          <li><a href="#s-errors" class="sub">Errors, aborts, retries</a></li>
+          <li><a href="#s-weak">7.1 Weak isolation levels</a></li>
+          <li><a href="#s-rc" class="sub">Read committed</a></li>
+          <li><a href="#s-si" class="sub">Snapshot isolation &amp; MVCC</a></li>
+          <li><a href="#s-lost" class="sub">Preventing lost updates</a></li>
+          <li><a href="#s-skew" class="sub">Write skew &amp; phantoms</a></li>
+          <li><a href="#s-levels">7.2 Which level prevents what</a></li>
+          <li><a href="#s-serial">7.3 Serializability</a></li>
+          <li><a href="#s-serialexec" class="sub">Actual serial execution</a></li>
+          <li><a href="#s-2pl" class="sub">Two-phase locking</a></li>
+          <li><a href="#s-ssi" class="sub">Serializable snapshot isolation</a></li>
+          <li><a href="#s-summary">7.4 Summary &amp; glossary</a></li>
+          <li><a href="#quiz-section">Quiz</a></li>
+        </ul>
+      </aside>
+
+      <div class="lesson-body">
+
+        <!-- ================= 7.0 ================= -->
+        <section class="block reveal" id="s-intro">
+          <p class="kicker">7.0 <span class="dim">·</span> The setup</p>
+          <h2>The slippery concept of a transaction</h2>
+          <p>Everything in this chapter starts from a list of things that go wrong in data systems. The database software or hardware may fail at any time — <em>including in the middle of a write operation</em>. The application may crash at any time — including halfway through a series of operations. Network interruptions can cut off the application from the database, or one node from another. Several clients may write at the same time, overwriting each other’s changes. A client may read data that makes no sense because it was only partially updated. Race conditions produce surprising bugs.</p>
+          <p>A <strong>transaction</strong> is the mechanism of choice for simplifying all this: a way for an application to group several reads and writes into a logical unit. Conceptually, all the reads and writes in a transaction are executed as one operation: either the entire transaction succeeds (<strong>commit</strong>) or it fails (<strong>abort</strong>, <strong>rollback</strong>). If it fails, the application can safely retry. Transactions are not a law of nature — they were created to simplify the programming model, so the application can ignore certain error scenarios because the database handles them instead: <strong>safety guarantees</strong>.</p>
+          <p>Not every application needs transactions, and sometimes weakening or abandoning them buys performance or availability. The history: almost all relational databases follow the style introduced in <strong>1975 by IBM System R</strong>, the first SQL database — the general idea has remained virtually the same for 40 years. Then in the late 2000s, NoSQL databases offered new data models, replication, and partitioning by default, and transactions were the main casualty — many abandoned them entirely or redefined the word to mean much less. The popular belief became “transactions are the antithesis of scalability.” Both viewpoints are pure hyperbole. Transactions have advantages and limitations, like every other design choice.</p>
+
+          <h3 id="s-acid">7.0.1 — The meaning of ACID</h3>
+          <p>The safety guarantees are described by <strong>ACID</strong> — Atomicity, Consistency, Isolation, Durability — coined in <strong>1983</strong> by Theo Härder and Andreas Reuter. The high-level idea is sound, but the devil is in the details: one database’s implementation of ACID does not equal another’s, the meaning of <em>isolation</em> is especially ambiguous, and today “ACID compliant” is mostly a marketing term. (Systems that don’t meet the criteria are sometimes called <strong>BASE</strong> — Basically Available, Soft state, Eventual consistency — which is even vaguer; the only sensible definition of BASE is “not ACID.”)</p>
+
+          <div class="term-grid">
+            <div class="term">
+              <h4>A — Atomicity</h4>
+              <p><strong>Not about concurrency</strong> (that’s isolation). It describes what happens when a fault occurs partway through several writes: if the transaction cannot complete, it is aborted and <strong>all its writes are discarded</strong>. The defining feature is really <em>abortability</em>.</p>
+            </div>
+            <div class="term">
+              <h4>C — Consistency</h4>
+              <p>An <strong>application-specific</strong> notion of the database being in a “good state” — invariants that must always hold (in accounting, credits and debits balanced). The database can’t stop you from writing bad data, so the C doesn’t really belong in ACID.</p>
+            </div>
+            <div class="term">
+              <h4>I — Isolation</h4>
+              <p>Concurrently executing transactions are isolated from each other — they cannot step on each other’s toes. Formally: <em>serializability</em>, the pretense that each transaction is the only one running.</p>
+            </div>
+            <div class="term">
+              <h4>D — Durability</h4>
+              <p>Once a transaction has committed successfully, its data will not be forgotten, even if there’s a hardware fault or the database crashes — written to nonvolatile storage, or replicated to some number of nodes.</p>
+            </div>
+          </div>
+
+          <p>Two of these deserve a closer look. On <strong>atomicity</strong>: in multi-threaded programming, “atomic” means no other thread can see a half-finished operation — but in ACID, atomicity is not about concurrency at all. It’s about <em>faults during multi-write sequences</em>: a process crashes, the network drops, a disk fills, a constraint is violated. Without atomicity, you don’t know which changes took effect; the application could retry, but that risks doing the same change twice. With atomicity, an aborted transaction is guaranteed to have changed nothing — so it can safely be retried. “Abortability” would have been a better term.</p>
+          <p>On <strong>consistency</strong>: the word is terribly overloaded — replica consistency and eventual consistency (Chapter 5), consistent hashing (Chapter 6), linearizability in CAP (Chapter 9), and here, the application’s own invariants. The ACID sense is a property of the <em>application</em>, not the database: atomicity, isolation, and durability are properties of the database, but the application must define its transactions to preserve its own consistency. (Joe Hellerstein’s remark: the C was “tossed in to make the acronym work.”)</p>
+          <p>On <strong>isolation</strong>, a first taste of the trouble: serializable isolation is rarely used in practice because of its performance penalty — <strong>Oracle 11g doesn’t even implement it</strong>, offering an isolation level <em>called</em> “serializable” that actually implements something weaker (snapshot isolation).</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 7-1 (recreated) · Two clients concurrently incrementing a counter</p>
+            <svg viewBox="0 0 780 320" role="img" aria-label="Both clients read 42, both write 43, and the counter ends at 43 instead of 44" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr7a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#5b6478"/>
+                </marker>
+              </defs>
+              <line x1="52" y1="60" x2="52" y2="260" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="728" y1="60" x2="728" y2="260" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <text x="52" y="40" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">CLIENT 1</text>
+              <text x="728" y="40" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">CLIENT 2</text>
+              <text x="30" y="160" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10" transform="rotate(-90 30 160)">time</text>
+              <circle cx="90" cy="80" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="84" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">1</text>
+              <rect x="108" y="66" width="240" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="228" y="85" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">read counter → 42</text>
+              <circle cx="690" cy="120" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="124" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">2</text>
+              <rect x="432" y="106" width="240" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="552" y="125" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">read counter → 42</text>
+              <circle cx="90" cy="160" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="164" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">3</text>
+              <rect x="108" y="146" width="240" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="228" y="165" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">write counter = 43</text>
+              <circle cx="690" cy="200" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="204" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">4</text>
+              <rect x="432" y="186" width="240" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="552" y="205" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">write counter = 43</text>
+              <line x1="348" y1="161" x2="432" y2="201" stroke="#5b6478" stroke-width="1.2" marker-end="url(#arr7a)"/>
+              <rect x="235" y="258" width="310" height="44" rx="10" fill="rgba(239,128,128,0.08)" stroke="#ef8080"/>
+              <text x="390" y="277" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="11">counter = 43 … should be 44</text>
+              <text x="390" y="293" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">two increments happened; one was lost</text>
+            </svg>
+            <p class="fig-caption">Each client reads the current value, adds 1, and writes it back — a <strong>read-modify-write cycle</strong>. Interleaved, the second write doesn’t include the first modification: the later write <em>clobbers</em> the earlier one. Isolation should make each transaction behave as if it were the only one on the database.</p>
+          </div>
+
+          <h3 id="s-durability">7.0.2 — Sidebar: replication and durability</h3>
+          <p>Durability has been understood as writing to an archive tape, then writing to disk or SSD, and more recently as <strong>replication</strong>. In a replicated database, durability may mean the data has been copied to some number of nodes — and the database must wait for those replications to complete before reporting a commit. But perfect durability does not exist, and the sidebar’s reality check is worth absorbing:</p>
+          <ul class="checklist">
+            <li>Write to disk and the machine dies — data safe but <strong>inaccessible</strong> until the machine is fixed or the disk moved; replicated systems stay available.</li>
+            <li>A <strong>correlated fault</strong> — a power outage or a bug that crashes every node on a particular input — can knock out all replicas at once, losing anything that lived only in memory. Writing to disk still matters, even for in-memory databases.</li>
+            <li>In an <strong>asynchronously replicated</strong> system, recent writes can be lost when the leader becomes unavailable (Chapter 5’s failover problem, again).</li>
+            <li>When power is suddenly cut, <strong>SSDs have been shown to sometimes violate their guarantees</strong> — even <code>fsync</code> isn’t guaranteed to work correctly. Disk firmware has bugs like any other software.</li>
+            <li>Subtle interactions between storage engine and filesystem can corrupt files after a crash, and on-disk data can gradually corrupt without detection — if it’s been corrupted for a while, replicas and recent backups may also be bad, forcing a restore from a historical backup.</li>
+          </ul>
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-value red">30–80%</span>
+              <span class="stat-label">Of SSDs develop at least one bad block in the first four years</span>
+              <span class="stat-note">one study’s finding — magnetic drives get fewer bad sectors but fail completely more often</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value red">weeks</span>
+              <span class="stat-label">How fast an unpowered SSD can start losing data</span>
+              <span class="stat-note">depending on temperature — power off is not a pause button</span>
+            </div>
+          </div>
+          <p>The conclusion to carry forward: no one technique provides absolute guarantees — only <strong>risk-reduction techniques that should be used together</strong>: writing to disk, replicating to remote machines, and backups. Take any theoretical “guarantee” with a healthy grain of salt.</p>
+
+          <h3 id="s-objects">7.0.3 — Single-object and multi-object operations</h3>
+          <p>Atomicity and isolation both describe what the database should do when a client makes several writes in one transaction: <strong>atomicity</strong> means an error halfway through aborts and discards everything so far (all-or-nothing); <strong>isolation</strong> means concurrent transactions see either all or none of another transaction’s writes, never a subset.</p>
+          <p>The book’s running example for what isolation prevents: an email application that stores an unread counter in a separate field (a denormalization). When a message arrives, the transaction inserts the email <em>and</em> increments the counter. If another transaction reads between those two writes, it sees the new message but a stale counter — an inconsistent halfway state caused by <strong>reading another transaction’s uncommitted writes: a dirty read</strong>.</p>
+          <p>And for atomicity: if the counter update fails halfway through the transaction, an atomic database aborts and rolls back the already-inserted email — the mailbox and the counter never drift out of sync.</p>
+          <p>Multi-object transactions need a way to know which operations belong to the same transaction — in relational databases, typically the client’s TCP connection: everything between <code>BEGIN TRANSACTION</code> and <code>COMMIT</code> on one connection is one transaction.</p>
+
+          <h4>Single-object writes</h4>
+          <p>Atomicity and isolation also apply to a single changing object. Write a 20 KB JSON document and ask: if the connection drops after 10 KB, does the database store an unparseable fragment? If power fails mid-overwrite, do old and new values get spliced together? If another client reads during the write, does it see a half-updated value? Storage engines almost universally prevent this: atomicity via a <strong>log for crash recovery</strong>, isolation via a <strong>lock on each object</strong>. Some databases also offer richer atomic single-object operations — an <strong>increment</strong> (removing the need for a read-modify-write cycle) and <strong>compare-and-set</strong> (write only if the value hasn’t been concurrently changed). Useful — but marketing that calls these “lightweight transactions” or “ACID” is misleading: a transaction is a mechanism for grouping <em>multiple operations on multiple objects</em>.</p>
+
+          <h4>The need for multi-object transactions</h4>
+          <p>Many distributed datastores abandoned multi-object transactions because they’re hard to implement across partitions. But nothing fundamentally prevents them (distributed transactions: Chapter 9), and three situations genuinely need them:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Foreign key references</h4><p>Rows in one table referencing rows in another (or vertices with edges). Inserting several records that refer to one another needs the foreign keys correct and up to date, or the data becomes nonsensical.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Document denormalization</h4><p>Document models keep related fields in one document — but document databases lacking joins encourage denormalization, and updating denormalized data means updating several documents at once (the email example).</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Secondary indexes</h4><p>Almost everything but pure key-value stores has them, and indexes are separate objects: without isolation, a record can appear in one index but not another mid-update.</p></div></div>
+          </div>
+          <p>All three can be built without transactions — but error handling gets much more complicated without atomicity, and the lack of isolation invites concurrency bugs.</p>
+
+          <h3 id="s-errors">7.0.4 — Handling errors and aborts</h3>
+          <p>A key feature of a transaction is that it can be aborted and safely retried. ACID databases are built on this philosophy: if atomicity, isolation, or durability is in danger, abandon the transaction entirely rather than leave it half-finished. Not everything follows it — leaderless replication datastores work on a best-effort basis: “the database will do as much as it can, and if it runs into an error, it won’t undo what it already did.” The application recovers.</p>
+          <p>And yet even developers on ACID databases prefer the happy path: popular ORMs like Rails’s ActiveRecord and Django <strong>don’t retry aborted transactions</strong> — the exception bubbles up, the user’s input is thrown away. A shame, since the whole point of aborts is to enable safe retries. Although — retrying isn’t perfect either:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>The transaction actually succeeded</h4><p>If the network failed while the server tried to acknowledge the successful commit, the client thinks it failed — and retrying performs it twice, unless you have application-level deduplication.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>The error is overload</h4><p>Retrying makes the problem worse. Limit retry counts, use exponential backoff, and handle overload-related errors differently.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Only transient errors are worth retrying</h4><p>Deadlock, isolation violation, temporary network interruption, failover — yes. A permanent error like a constraint violation will fail every time.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>Side effects outside the database</h4><p>If the transaction sends an email, aborting doesn’t unsend it — and retrying sends it again. For multiple systems committing or aborting together, you need two-phase commit (Chapter 9).</p></div></div>
+            <div class="num-card"><span class="n">5.</span><div><h4>The client process fails while retrying</h4><p>Whatever data it was trying to write is lost.</p></div></div>
+          </div>
+        </section>
+
+        <!-- ================= 7.1 ================= -->
+        <section class="block reveal" id="s-weak">
+          <p class="kicker">7.1 <span class="dim">·</span> The partial shields</p>
+          <h2>Weak isolation levels</h2>
+          <p>If two transactions don’t touch the same data, they can run in parallel safely. Concurrency bugs only come into play when one transaction reads data that another is concurrently modifying. Those bugs are <strong>hard to find by testing</strong> — they trigger only when you get unlucky with the timing, they’re rare, and they’re difficult to reproduce; and in a large application you don’t necessarily know what else is accessing the database. So databases have long tried to hide concurrency from developers with transaction isolation. In theory, isolation should let you pretend no concurrency is happening. In practice, serializable isolation has a performance cost many databases won’t pay, so <strong>weaker levels</strong> that protect against some race conditions but not all are the norm — harder to understand, prone to subtle bugs.</p>
+          <div class="callout warn">
+            <p class="callout-title">This is not a theoretical problem</p>
+            <p>Congestion bugs from weak isolation have caused substantial loss of money, investigations by financial auditors, and customer data corruption. The popular retort — “use an ACID database if you’re handling financial data!” — misses the point: even many popular relational databases (usually considered “ACID”) use weak isolation, so they wouldn’t necessarily have prevented these bugs.</p>
+          </div>
+
+          <h3 id="s-rc">7.1.1 — Read committed</h3>
+          <p>The most basic level, making two guarantees:</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>No dirty reads</h4>
+              <p>When reading, you only see data that has been committed.</p>
+            </div>
+            <div class="term">
+              <h4>No dirty writes</h4>
+              <p>When writing, you only overwrite data that has been committed.</p>
+            </div>
+          </div>
+
+          <h4>No dirty reads</h4>
+          <p>A transaction has written data but hasn’t committed or aborted yet. Can another transaction see that uncommitted data? If yes — that’s a <strong>dirty read</strong>. Under read committed, writes become visible to others only when the transaction commits (and then all its writes become visible at once). Two reasons this matters: a multi-object update would be seen partially (the new email but the old counter — confusing to users and misleading to other transactions), and if the writing transaction aborts, a dirty reader would have seen data that is <em>rolled back — never actually committed at all</em>, which gets mind-bending fast.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 7-4 (recreated) · No dirty reads</p>
+            <svg viewBox="0 0 780 250" role="img" aria-label="User 1 sets x=3 but has not committed; user 2's read of x still returns 2; after user 1 commits, user 2 sees 3" style="width:100%;height:auto;display:block">
+              <line x1="52" y1="60" x2="52" y2="196" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="728" y1="60" x2="728" y2="196" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <text x="52" y="40" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">USER 1 (writer)</text>
+              <text x="728" y="40" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">USER 2 (reader)</text>
+              <circle cx="90" cy="80" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="84" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">1</text>
+              <rect x="108" y="66" width="230" height="30" rx="8" fill="#151c30" stroke="#f0b35c"/>
+              <text x="223" y="85" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">set x = 3 (uncommitted)</text>
+              <circle cx="690" cy="120" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="124" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">2</text>
+              <rect x="442" y="106" width="230" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="557" y="125" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">get x → 2 (old value)</text>
+              <circle cx="90" cy="160" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="164" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">3</text>
+              <rect x="108" y="146" width="230" height="30" rx="8" fill="rgba(240,179,92,0.1)" stroke="#f0b35c"/>
+              <text x="223" y="165" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="10.5">commit ✓</text>
+              <circle cx="690" cy="200" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="204" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">4</text>
+              <rect x="442" y="186" width="230" height="30" rx="8" fill="#151c30" stroke="#63dfc2"/>
+              <text x="557" y="205" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10.5">get x → 3 (only now)</text>
+              <text x="390" y="238" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10">uncommitted writes stay invisible; on commit, all writes become visible at once</text>
+            </svg>
+            <p class="fig-caption">The read-visibility half of read committed.</p>
+          </div>
+
+          <h4>No dirty writes</h4>
+          <p>Two transactions update the same object; if the earlier write belongs to a transaction that hasn’t committed yet, the later write is overwriting an uncommitted value — a <strong>dirty write</strong>. Read committed prevents this, usually by <strong>delaying the second write</strong> until the first transaction commits or aborts. The book’s example: a used-car site where Alice and Bob simultaneously buy the same car. Buying requires two writes — update the listing, and send the invoice. With dirty writes interleaved, <strong>the sale is awarded to Bob but the invoice goes to Alice</strong>.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 7-5 (recreated) · Dirty writes mix up the car sale</p>
+            <svg viewBox="0 0 780 280" role="img" aria-label="Alice updates the listing, Bob overwrites it, Bob updates the invoice, Alice overwrites that — listing ends up Bob's, invoice Alice's" style="width:100%;height:auto;display:block">
+              <line x1="52" y1="56" x2="52" y2="216" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="728" y1="56" x2="728" y2="216" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <text x="52" y="36" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">ALICE</text>
+              <text x="728" y="36" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">BOB</text>
+              <circle cx="90" cy="76" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="80" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">1</text>
+              <rect x="108" y="62" width="240" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="228" y="81" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">UPDATE listing → Alice</text>
+              <circle cx="690" cy="116" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="120" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">2</text>
+              <rect x="432" y="102" width="240" height="30" rx="8" fill="rgba(239,128,128,0.07)" stroke="#ef8080"/>
+              <text x="552" y="121" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10.5">UPDATE listing → Bob (!)</text>
+              <circle cx="690" cy="156" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="160" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">3</text>
+              <rect x="432" y="142" width="240" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="552" y="161" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">UPDATE invoice → Bob</text>
+              <circle cx="90" cy="196" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="200" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">4</text>
+              <rect x="108" y="182" width="240" height="30" rx="8" fill="rgba(239,128,128,0.07)" stroke="#ef8080"/>
+              <text x="228" y="201" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10.5">UPDATE invoice → Alice (!)</text>
+              <rect x="205" y="238" width="370" height="40" rx="10" fill="rgba(239,128,128,0.08)" stroke="#ef8080"/>
+              <text x="390" y="256" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10.5">listing: sold to Bob · invoice: sent to Alice</text>
+              <text x="390" y="270" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9.5">conflicting writes from different transactions, mixed up</text>
+            </svg>
+            <p class="fig-caption">But note: read committed does <strong>not</strong> prevent Figure 7-1’s counter race — the second write there happens after the first transaction commits, so it isn’t dirty. Still wrong, for a different reason (lost updates, below).</p>
+          </div>
+
+          <h4>Implementing read committed</h4>
+          <p>Very popular — the default in Oracle 11g, PostgreSQL, SQL Server 2012, MemSQL, and many others. <strong>Dirty writes</strong> are prevented with <strong>row-level locks</strong>: to modify an object, a transaction must first acquire the lock on it and hold it until commit or abort; only one transaction can hold it. This is automatic in read committed mode and stronger levels. <strong>Dirty reads</strong> — two options:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Read locks (bad idea)</h4><p>Require readers to briefly acquire the same lock. It works, but one long-running write transaction forces many read-only transactions to wait — harmful to read response times and operability.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Version tracking (what most do)</h4><p>For every written object, remember both the <strong>old committed value</strong> and the <strong>new value</strong> held by the lock owner. While the write transaction is ongoing, other transactions are simply given the old value; when the write commits, readers switch to the new value. No reads block.</p></div></div>
+          </div>
+          <p>At the time of writing, the only mainstream databases using locks for read committed are IBM DB2 and Microsoft SQL Server with <code>read_committed_snapshot=off</code>.</p>
+
+          <h3 id="s-si">7.1.2 — Snapshot isolation and repeatable read</h3>
+          <p>Read committed looks sufficient at first glance — it allows aborts, prevents reading incomplete results, prevents intermingled writes. But there are still plenty of ways to get concurrency bugs. The signature example — <strong>Alice’s bank accounts</strong>:</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 7-6 (recreated) · Read skew: $100 vanishes</p>
+            <svg viewBox="0 0 780 300" role="img" aria-label="A transfer transaction debits account 1 then credits account 2; Alice reads between the two writes and sees $400 plus $500 — $900 total" style="width:100%;height:auto;display:block">
+              <line x1="52" y1="60" x2="52" y2="226" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="728" y1="60" x2="728" y2="226" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <text x="52" y="40" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">TRANSFER TXN</text>
+              <text x="728" y="40" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">ALICE’S READ</text>
+              <circle cx="90" cy="80" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="84" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">1</text>
+              <rect x="108" y="66" width="270" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="243" y="85" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">account 1: $500 → $400 (debit)</text>
+              <circle cx="690" cy="120" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="124" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">2</text>
+              <rect x="432" y="106" width="230" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="547" y="125" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">read account 1 → $400</text>
+              <circle cx="690" cy="160" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="164" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">3</text>
+              <rect x="432" y="146" width="230" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="547" y="165" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">read account 2 → $500</text>
+              <circle cx="90" cy="200" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="204" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">4</text>
+              <rect x="108" y="186" width="270" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="243" y="205" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">account 2: $500 → $600 (credit)</text>
+              <rect x="205" y="248" width="370" height="40" rx="10" fill="rgba(239,128,128,0.08)" stroke="#ef8080"/>
+              <text x="390" y="266" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="11">Alice sees $400 + $500 = $900</text>
+              <text x="390" y="280" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9.5">$100 seems to vanish into thin air — it doesn’t, really</text>
+            </svg>
+            <p class="fig-caption">Alice has $1,000 split across two accounts; a transaction transfers $100 between them. If her read lands between the debit and the credit, she sees an inconsistent state: after the outgoing transfer but before the incoming payment. This is a <strong>nonrepeatable read</strong>, or <strong>read skew</strong> — reading the balance again later would return a different value. Read skew is <em>acceptable</em> under read committed: everything Alice saw was committed at the time she read it.</p>
+          </div>
+
+          <p>Reloading the page a few seconds later would fix Alice’s view. But some situations can’t tolerate temporary inconsistency: <strong>backups</strong> — copying a large database takes hours, writes continue meanwhile, and the backup ends up with old parts and new parts; restoring from it makes the inconsistencies <em>permanent</em>. And <strong>analytic queries and integrity checks</strong> — scans over large parts of the database return nonsense if they observe different points in time.</p>
+          <p>The solution: <strong>snapshot isolation</strong> — each transaction reads from a <em>consistent snapshot</em> of the database: all the data committed at the start of the transaction. Even if other transactions change the data afterwards, each transaction keeps seeing the old state. A boon for long-running read-only queries like backups and analytics. Supported by PostgreSQL, MySQL with InnoDB, Oracle, SQL Server, and others.</p>
+
+          <h4>Implementing snapshot isolation: MVCC</h4>
+          <p>Like read committed, write locks prevent dirty writes — one writing transaction can block another writing the same object. But <strong>reads take no locks at all</strong>. The key principle: <strong>readers never block writers, and writers never block readers</strong> — long read queries on a consistent snapshot run alongside normal writes without lock contention. To pull that off, the database keeps <strong>several different committed versions of an object</strong> side by side, because different in-progress transactions need different points in time: <strong>multi-version concurrency control (MVCC)</strong>.</p>
+          <p>A typical approach (Figure 7-7, PostgreSQL-flavored): each transaction gets a unique, always-increasing <strong>transaction ID (txid)</strong> at start; every write is tagged with the writer’s txid. Each row has a <code>created_by</code> field (the txid that inserted it) and a <code>deleted_by</code> field, initially empty. A delete doesn’t remove the row — it marks it by setting <code>deleted_by</code>. Later, when no transaction can still access the deleted data, a <strong>garbage collection</strong> process removes marked rows. An <strong>update is internally a delete + create</strong>.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 7-7 (recreated) · MVCC with multi-version objects</p>
+            <svg viewBox="0 0 780 280" role="img" aria-label="The accounts table has two rows for account 2: balance 500 created by transaction 12 deleted by transaction 13, and balance 400 created by transaction 13" style="width:100%;height:auto;display:block">
+              <text x="390" y="26" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="12">accounts table (PostgreSQL-style)</text>
+              <rect x="60" y="44" width="120" height="34" fill="#0f1420" stroke="#1e2740"/>
+              <text x="120" y="65" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">account</text>
+              <rect x="180" y="44" width="140" height="34" fill="#0f1420" stroke="#1e2740"/>
+              <text x="250" y="65" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">balance</text>
+              <rect x="320" y="44" width="150" height="34" fill="#0f1420" stroke="#1e2740"/>
+              <text x="395" y="65" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">created_by</text>
+              <rect x="470" y="44" width="150" height="34" fill="#0f1420" stroke="#1e2740"/>
+              <text x="545" y="65" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">deleted_by</text>
+              <rect x="60" y="82" width="120" height="34" fill="#151c30" stroke="#2b3859"/>
+              <text x="120" y="103" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10">account 1</text>
+              <rect x="180" y="82" width="140" height="34" fill="#151c30" stroke="#2b3859"/>
+              <text x="250" y="103" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10">$500</text>
+              <rect x="320" y="82" width="150" height="34" fill="#151c30" stroke="#2b3859"/>
+              <text x="395" y="103" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10">12</text>
+              <rect x="470" y="82" width="150" height="34" fill="#151c30" stroke="#2b3859"/>
+              <text x="545" y="103" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10">—</text>
+              <rect x="60" y="120" width="120" height="34" fill="#151c30" stroke="#2b3859"/>
+              <text x="120" y="141" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10">account 2</text>
+              <rect x="180" y="120" width="140" height="34" fill="rgba(239,128,128,0.06)" stroke="#ef8080"/>
+              <text x="250" y="141" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10">$500</text>
+              <rect x="320" y="120" width="150" height="34" fill="#151c30" stroke="#2b3859"/>
+              <text x="395" y="141" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10">12</text>
+              <rect x="470" y="120" width="150" height="34" fill="rgba(239,128,128,0.06)" stroke="#ef8080"/>
+              <text x="545" y="141" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10">13 (delete)</text>
+              <rect x="60" y="158" width="120" height="34" fill="#151c30" stroke="#2b3859"/>
+              <text x="120" y="179" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10">account 2</text>
+              <rect x="180" y="158" width="140" height="34" fill="rgba(99,223,194,0.08)" stroke="#63dfc2"/>
+              <text x="250" y="179" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10">$400</text>
+              <rect x="320" y="158" width="150" height="34" fill="rgba(99,223,194,0.08)" stroke="#63dfc2"/>
+              <text x="395" y="179" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10">13 (create)</text>
+              <rect x="470" y="158" width="150" height="34" fill="#151c30" stroke="#2b3859"/>
+              <text x="545" y="179" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10">—</text>
+              <text x="120" y="222" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">txn 13 deducts $100 from account 2:</text>
+              <text x="120" y="238" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">update = delete + create,</text>
+              <text x="120" y="254" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">so two rows exist for account 2</text>
+              <text x="470" y="222" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10">txn 12 (started earlier) reads account 2:</text>
+              <text x="470" y="238" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10">sees $500 — the deletion by 13 is invisible</text>
+              <text x="470" y="254" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10">to it, and so is 13’s new row</text>
+            </svg>
+            <p class="fig-caption">Note the footnote-worthy detail: PostgreSQL’s transaction IDs are 32-bit integers that overflow after roughly 4 billion transactions; the vacuum process cleans up so the wraparound doesn’t corrupt data.</p>
+          </div>
+
+          <h4>Visibility rules for a consistent snapshot</h4>
+          <p>Transaction IDs decide which objects a reader sees. Four rules:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>In-progress writes are ignored</h4><p>At the start of each transaction, the database lists all other transactions in progress; writes by those are ignored — <em>even if they subsequently commit</em>.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Aborted writes are ignored</h4><p>Permanently.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Later transactions are ignored</h4><p>Writes by transactions with a later (higher) txid — started after the current one — are invisible, committed or not.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>Everything else is visible</h4><p>All other writes are visible to the application’s queries.</p></div></div>
+          </div>
+          <p>The rules apply to creation <em>and</em> deletion of objects. Simplified to a single condition: an object is visible if (a) the creating transaction had committed when the reader’s transaction started, and (b) the object is not marked for deletion — or if it is, the deleting transaction had not yet committed when the reader started. In Figure 7-7: transaction 12 reads account 2 as $500, because the $500 row’s deletion was performed by transaction 13 (invisible to 12 by rule 3), and 13’s new $400 row is invisible for the same reason.</p>
+          <p>Read committed vs. snapshot isolation in MVCC terms: a typical approach is that <strong>read committed uses a separate snapshot for each query, while snapshot isolation uses the same snapshot for an entire transaction</strong>. And long-running transactions keep reading values that other transactions have long overwritten or deleted — that’s fine; never updating in place and always creating a new version is a small overhead for a consistent snapshot.</p>
+
+          <h4>Indexes and snapshot isolation</h4>
+          <p>How do indexes work in a multi-version database? Option one: the index points to <strong>all versions of an object</strong>, and an index query filters out versions invisible to the current transaction; as garbage collection removes old versions, the index entries go too. (PostgreSQL has optimizations for skipping index updates when versions of the same object fit on the same page.) Option two, used by CouchDB, Datomic, and LMDB: <strong>append-only / copy-on-write B-trees</strong> — updating a page doesn’t overwrite it but creates a new copy, with parents copied and repointed up to the root; unaffected pages stay immutable. Every write transaction creates a <strong>new B-tree root</strong>, and each root is a consistent snapshot of the database as of its creation — no transaction-ID filtering needed, at the cost of a background compaction/GC process.</p>
+
+          <h4>Repeatable read, and why nobody knows what it means</h4>
+          <p>Snapshot isolation is useful — especially for read-only transactions — but the naming is a mess, because <strong>the SQL standard has no concept of snapshot isolation</strong> (it’s based on System R’s 1975 isolation levels, and SI hadn’t been invented). The standard instead defines <em>repeatable read</em>, which looks superficially similar. So: PostgreSQL and MySQL call their snapshot isolation “repeatable read” because it satisfies the standard’s requirements — standards compliance. <strong>Oracle calls snapshot isolation “serializable.”</strong> And IBM DB2 uses “repeatable read” to refer to <em>serializability</em>. The standard’s definition is ambiguous, imprecise, and not implementation-independent; even the formal research definition of repeatable read isn’t met by most implementations. Nobody really knows what repeatable read means.</p>
+
+          <h3 id="s-lost">7.1.3 — Preventing lost updates</h3>
+          <p>Read committed and snapshot isolation have mostly been about what a <em>reader</em> sees amid concurrent writes. The classic write-write conflict beyond dirty writes is the <strong>lost update</strong> (Figure 7-1): an application reads a value, modifies it, writes it back; two concurrent transactions doing this lose one modification — the later write clobbers the earlier. Three recurring scenarios: incrementing a counter or account balance; making a local change to a complex value like adding an element to a list inside a JSON document; and two users editing a wiki page, each saving the entire page contents. Four lines of defense:</p>
+
+          <h4>Approach 1 — Atomic write operations</h4>
+          <p>Remove the read-modify-write cycle from application code:</p>
+          <div class="code-block">UPDATE counters SET value = value + 1 WHERE key = 'foo';</div>
+          <p>Concurrency-safe in most relational databases; MongoDB offers atomic operations for local modifications of a JSON document, Redis for its data structures. Implemented by taking an exclusive lock when the object is read (<strong>cursor stability</strong>) or by forcing atomic operations through a single thread. Usually the best choice — when the write can be expressed that way; wiki-page editing can’t. Watch out: ORMs make it easy to accidentally perform an unsafe read-modify-write instead.</p>
+
+          <h4>Approach 2 — Explicit locking</h4>
+          <p>When built-ins don’t suffice, the application locks the objects it will update, forcing concurrent read-modify-write cycles to happen sequentially. Example 7-1, a multiplayer game moving a robot:</p>
+          <div class="code-block">BEGIN TRANSACTION;
+SELECT * FROM figures
+  WHERE name = 'robot' AND game_id = 222
+  FOR UPDATE;
+-- Check whether move is valid, then update the position
+-- of the piece that was returned by the previous SELECT.
+UPDATE figures SET position = 'c4' WHERE id = 1234;
+COMMIT;</div>
+          <p><code>FOR UPDATE</code> tells the database to lock all rows the query returns. It works, but getting it right requires care — forget one necessary lock somewhere and you’ve introduced a race condition.</p>
+
+          <h4>Approach 3 — Automatically detecting lost updates</h4>
+          <p>Let the read-modify-writes run in parallel; the transaction manager detects a lost update and aborts, forcing a retry. Efficient in conjunction with snapshot isolation: <strong>PostgreSQL’s repeatable read, Oracle’s serializable, and SQL Server’s snapshot isolation all detect lost updates and abort automatically</strong>. MySQL/InnoDB’s repeatable read <em>doesn’t</em> — some authors argue a database must prevent lost updates to qualify as snapshot isolation, so MySQL doesn’t provide it under that definition. The great advantage: no special database features in your code — you can forget a lock, but you can’t forget automatic detection.</p>
+
+          <h4>Approach 4 — Compare-and-set</h4>
+          <p>In databases without transactions, an update that only happens if the value hasn’t changed since you last read it:</p>
+          <div class="code-block">-- This may or may not be safe, depending on the database implementation
+UPDATE wiki_pages SET content = 'new content'
+  WHERE id = 1234 AND content = 'old content';</div>
+          <p>If the content no longer matches, the update affects nothing — check and retry if needed. The caveat: if the database lets the WHERE clause read from an old snapshot, the condition may be true even while a concurrent write is happening — <strong>check whether your database’s compare-and-set is safe before relying on it</strong>.</p>
+
+          <h4>Conflict resolution and replication</h4>
+          <p>Replicated databases add another dimension — multiple nodes accepting writes concurrently. Locks and compare-and-set assume <strong>a single up-to-date copy of the data</strong>, which multi-leader and leaderless replication cannot guarantee — so those techniques don’t apply. Instead (Chapter 5): concurrent writes create several <strong>siblings</strong> that application code or special data structures resolve and merge. Atomic operations <em>can</em> work well when they’re <strong>commutative</strong> — order-independent, like incrementing a counter or adding to a set — the idea behind Riak 2.0 datatypes, which merge concurrent updates without losing any. And last write wins, the default in many replicated databases, is <strong>prone to lost updates</strong> — Chapter 5’s warning, again.</p>
+        </section>
+
+        <!-- ================= write skew ================= -->
+        <section class="block reveal" id="s-skew">
+          <p class="kicker">7.1.4 <span class="dim">·</span> The subtle one</p>
+          <h2>Write skew and phantoms</h2>
+          <p>Dirty writes and lost updates are conflicts over the <em>same</em> objects. Write skew is subtler: conflicts over a pattern that spans different objects.</p>
+
+          <h3>The doctors on-call example</h3>
+          <p>A hospital application manages on-call shifts. Several doctors are usually on call at once, but <strong>at least one must be on call at all times</strong>. Alice and Bob are the two on-call doctors for a shift; both feel unwell and both click “go off call” at roughly the same time:</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 7-8 (recreated) · Write skew: no doctor left on call</p>
+            <svg viewBox="0 0 780 330" role="img" aria-label="Both transactions check that two or more doctors are on call, each takes one doctor off call, both commit, and now no doctor is on call" style="width:100%;height:auto;display:block">
+              <line x1="52" y1="60" x2="52" y2="246" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="728" y1="60" x2="728" y2="246" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <text x="52" y="40" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">ALICE’S TXN</text>
+              <text x="728" y="40" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">BOB’S TXN</text>
+              <circle cx="90" cy="80" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="84" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">1</text>
+              <rect x="108" y="66" width="280" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="248" y="85" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">SELECT on_call doctors → 2 ✓ safe</text>
+              <circle cx="690" cy="120" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="124" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">2</text>
+              <rect x="392" y="106" width="280" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="532" y="125" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">SELECT on_call doctors → 2 ✓ safe</text>
+              <circle cx="90" cy="160" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="164" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">3</text>
+              <rect x="108" y="146" width="280" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="248" y="165" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">UPDATE Alice on_call = false</text>
+              <circle cx="690" cy="200" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="204" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">4</text>
+              <rect x="392" y="186" width="280" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="532" y="205" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">UPDATE Bob on_call = false</text>
+              <circle cx="90" cy="240" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="244" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">5</text>
+              <rect x="108" y="226" width="130" height="30" rx="8" fill="rgba(240,179,92,0.1)" stroke="#f0b35c"/>
+              <text x="173" y="245" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="10.5">commit ✓</text>
+              <circle cx="690" cy="240" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="244" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">5</text>
+              <rect x="620" y="226" width="130" height="30" rx="8" fill="rgba(99,223,194,0.1)" stroke="#63dfc2"/>
+              <text x="685" y="245" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10.5">commit ✓</text>
+              <rect x="205" y="272" width="370" height="44" rx="10" fill="rgba(239,128,128,0.08)" stroke="#ef8080"/>
+              <text x="390" y="290" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="11">on-call doctors: 0</text>
+              <text x="390" y="306" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9.5">under snapshot isolation, both checks read “2” and both commits succeed</text>
+            </svg>
+            <p class="fig-caption">Each transaction checks that two or more doctors are on call, concludes it’s safe for one to leave, and updates <em>its own</em> record. Both commit; the requirement is violated. Neither a dirty write nor a lost update — the two transactions touched <strong>different objects</strong> — but definitely a race condition: run one after the other and the second doctor would have been stopped.</p>
+          </div>
+
+          <h4>Characterizing write skew</h4>
+          <p><strong>Write skew is a generalization of the lost update</strong>: two transactions read the same objects, then update some of those objects — possibly different ones. When they update the <em>same</em> object, you get a dirty write or lost update instead. The prevention options are more restricted:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Atomic single-object operations don’t help</h4><p>Multiple objects are involved.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Automatic detection doesn’t help</h4><p>The lost-update detection in PostgreSQL’s repeatable read, MySQL/InnoDB’s repeatable read, Oracle’s serializable, and SQL Server’s snapshot isolation does not catch write skew. Preventing it automatically requires <strong>true serializable isolation</strong>.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Constraints — only sometimes</h4><p>Uniqueness and foreign keys are enforceable, but “at least one doctor on call” spans multiple objects; most databases can’t express it (triggers or materialized views, maybe).</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>Explicit locking — the second-best</h4><p>If you can’t run serializable: lock the rows the transaction depends on. <code>SELECT * FROM doctors WHERE on_call = true AND shift_id = 1234 FOR UPDATE</code> — then the second transaction’s check blocks until the first commits.</p></div></div>
+          </div>
+
+          <h4>More examples of write skew</h4>
+          <ul class="checklist">
+            <li><strong>Meeting rooms:</strong> check for overlapping bookings; if none, insert yours. Two transactions can both see “no bookings” and both insert overlapping ones — Example 7-2 below.</li>
+            <li><strong>Multiplayer game:</strong> Example 7-1’s lock stops two players moving the <em>same</em> figure, but not two figures moving to the <em>same square</em>; a unique constraint may or may not fit the rule being enforced.</li>
+            <li><strong>Claiming a username:</strong> two concurrent sign-ups check the name is free and create accounts. <strong>The one case with a clean fix: a unique constraint</strong> — the second insert aborts.</li>
+            <li><strong>Double spending:</strong> insert a tentative spending item, list the account’s items, check the sum is positive — two concurrent spends can both pass the check and drive the balance negative, neither seeing the other.</li>
+          </ul>
+
+          <div class="code-block">BEGIN TRANSACTION;
+-- Check for any existing bookings that overlap with the period of noon-1pm
+SELECT COUNT(*) FROM bookings
+  WHERE room_id = 123 AND
+    end_time &gt; '2015-01-01 12:00' AND start_time &lt; '2015-01-01 13:00';
+-- If the previous query returned zero:
+INSERT INTO bookings
+  (room_id, start_time, end_time, user_id)
+  VALUES (123, '2015-01-01 12:00', '2015-01-01 13:00', 666);
+COMMIT;</div>
+          <p class="fig-caption" style="margin-top:-10px">Example 7-2 — the meeting room booking, not safe under snapshot isolation. (In PostgreSQL you could do this more elegantly with range types, but they aren’t widely supported.)</p>
+
+          <h3>Phantoms causing write skew</h3>
+          <p>All of those examples share one pattern: (1) a <strong>SELECT checks some requirement</strong> — two doctors on call, no conflicting bookings, the square is free, the username isn’t taken, the balance is positive; (2) <strong>the application decides</strong> based on the result; (3) <strong>a write changes the precondition</strong> of that decision — re-run the SELECT after committing, and it returns a different answer. The steps may even occur in a different order.</p>
+          <p>In the doctors example, the row being modified was one of the rows the query returned, so <code>SELECT FOR UPDATE</code> could lock it. The other examples are different: <strong>they check for the absence of rows matching a condition, and the write adds a row matching that same condition</strong>. If the query returns no rows, there’s nothing to attach a lock to.</p>
+
+          <div class="figure">
+            <p class="fig-head">The phantom, drawn · both bookings see zero, both insert</p>
+            <svg viewBox="0 0 780 330" role="img" aria-label="Two transactions both count zero overlapping bookings and both insert an overlapping booking, so the room is double-booked" style="width:100%;height:auto;display:block">
+              <line x1="52" y1="60" x2="52" y2="246" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="728" y1="60" x2="728" y2="246" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <text x="52" y="40" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">TXN 1</text>
+              <text x="728" y="40" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">TXN 2</text>
+              <circle cx="90" cy="80" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="84" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">1</text>
+              <rect x="108" y="66" width="300" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="258" y="85" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">COUNT overlapping bookings → 0 ✓</text>
+              <circle cx="690" cy="120" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="124" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">2</text>
+              <rect x="382" y="106" width="300" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="532" y="125" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">COUNT overlapping bookings → 0 ✓</text>
+              <circle cx="90" cy="160" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="164" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">3</text>
+              <rect x="108" y="146" width="300" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="258" y="165" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">INSERT booking 12:00–13:00, room 123</text>
+              <circle cx="90" cy="200" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="204" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">4</text>
+              <rect x="108" y="186" width="130" height="30" rx="8" fill="rgba(240,179,92,0.1)" stroke="#f0b35c"/>
+              <text x="173" y="205" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="10.5">commit ✓</text>
+              <circle cx="690" cy="200" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="204" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">5</text>
+              <rect x="382" y="186" width="300" height="30" rx="8" fill="rgba(239,128,128,0.07)" stroke="#ef8080"/>
+              <text x="532" y="205" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10.5">INSERT booking 12:30–13:30, room 123 (!)</text>
+              <circle cx="690" cy="240" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="244" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">6</text>
+              <rect x="620" y="226" width="130" height="30" rx="8" fill="rgba(99,223,194,0.1)" stroke="#63dfc2"/>
+              <text x="685" y="245" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10.5">commit ✓</text>
+              <rect x="205" y="272" width="370" height="44" rx="10" fill="rgba(239,128,128,0.08)" stroke="#ef8080"/>
+              <text x="390" y="290" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="11">room 123: double-booked</text>
+              <text x="390" y="306" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9.5">each INSERT is a row that didn’t exist when the other’s COUNT ran — a phantom</text>
+            </svg>
+            <p class="fig-caption">A <strong>phantom</strong>: a write in one transaction changes the result of a search query in another. Snapshot isolation avoids phantoms in read-only queries, but in read-write transactions like these, phantoms make write skew particularly tricky.</p>
+          </div>
+
+          <h3>Materializing conflicts</h3>
+          <p>If the problem is that there’s no object to attach a lock to — <strong>artificially introduce one</strong>. For meeting rooms: create a table of time slots and rooms, one row per room per 15-minute period, pre-created for (say) the next six months. A transaction wanting to book locks (<code>SELECT FOR UPDATE</code>) the rows for its room and time range, then checks and inserts as before. The extra table stores no booking information — <strong>it’s purely a collection of locks</strong>, turning a phantom into a lock conflict on concrete rows. This is called <strong>materializing conflicts</strong>.</p>
+          <div class="callout warn">
+            <p class="callout-title">A last resort</p>
+            <p>It’s hard and error-prone to figure out how to materialize conflicts, and ugly to let a concurrency-control mechanism leak into the application’s data model. A serializable isolation level is much preferable in most cases.</p>
+          </div>
+        </section>
+
+        <!-- ================= levels table ================= -->
+        <section class="block reveal" id="s-levels">
+          <p class="kicker">7.2 <span class="dim">·</span> The cheat sheet</p>
+          <h2>Which level prevents what</h2>
+          <p>Putting the anomaly ladder side by side — the summary of everything 7.1 covered, and the reference to carry into the serializability discussion:</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Race condition</th><th>What goes wrong</th><th>Read committed</th><th>Snapshot isolation</th><th>Serializable</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Dirty read</strong></td><td>You read another transaction’s writes before they commit</td><td>prevented</td><td>prevented</td><td>prevented</td></tr>
+                <tr><td><strong>Dirty write</strong></td><td>You overwrite data another transaction wrote but hasn’t committed</td><td>prevented</td><td>prevented</td><td>prevented</td></tr>
+                <tr><td><strong>Read skew / nonrepeatable read</strong></td><td>You see different parts of the database at different points in time (Alice’s $900)</td><td>possible</td><td>prevented — consistent snapshot via MVCC</td><td>prevented</td></tr>
+                <tr><td><strong>Lost update</strong></td><td>Two concurrent read-modify-writes; one clobbers the other</td><td>possible</td><td>prevented automatically by some (PostgreSQL RR, Oracle “serializable”, SQL Server SI) — <em>not</em> MySQL/InnoDB RR</td><td>prevented</td></tr>
+                <tr><td><strong>Write skew</strong></td><td>You act on a premise that is no longer true at commit time (the doctors)</td><td>possible</td><td>possible</td><td>prevented</td></tr>
+                <tr><td><strong>Phantoms</strong></td><td>A write changes the result of another transaction’s search query</td><td>possible</td><td>prevented for read-only queries; write-skew phantoms remain</td><td>prevented</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Weak levels protect against some anomalies and leave the application to handle the rest manually (explicit locking, materialized conflicts). <strong>Only serializable isolation protects against all of them.</strong> And what databases actually call their levels — the defaults table, with the naming landmines noted in the text:</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Database</th><th>Default level</th><th>Naming notes from the chapter</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Oracle 11g</strong></td><td>read committed</td><td>its level called “serializable” is actually <strong>snapshot isolation</strong> — weaker than true serializable; no real serializable at all</td></tr>
+                <tr><td><strong>PostgreSQL</strong></td><td>read committed</td><td>snapshot isolation lives under the name “repeatable read”; since 9.1, true serializable via SSI</td></tr>
+                <tr><td><strong>MySQL / InnoDB</strong></td><td>repeatable read</td><td>its repeatable read does <strong>not detect lost updates</strong> — arguably not snapshot isolation; its serializable level is 2PL-based</td></tr>
+                <tr><td><strong>SQL Server 2012</strong></td><td>read committed</td><td>snapshot isolation supported; serializable = 2PL; read_committed_snapshot=off uses locks for read committed</td></tr>
+                <tr><td><strong>IBM DB2</strong></td><td>—</td><td>uses “repeatable read” to mean <strong>serializability</strong>; read committed implemented with locks (read_committed_snapshot=off)</td></tr>
+                <tr><td><strong>MemSQL</strong></td><td>read committed</td><td>same default as the Oracle/PostgreSQL/SQL Server group</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- ================= 7.3 ================= -->
+        <section class="block reveal" id="s-serial">
+          <p class="kicker">7.3 <span class="dim">·</span> The real thing</p>
+          <h2>Serializability</h2>
+          <p>The sad situation, restated: isolation levels are hard to understand and inconsistently implemented; looking at application code, it’s difficult to tell whether it’s safe at a particular level — especially in a large application where you don’t know what else runs concurrently; and there are no good tools to help detect race conditions (static analysis hasn’t made it to practice; concurrency testing is hard because problems occur only with unlucky timing). This has been true since weak isolation levels appeared in the 1970s, and the answer from researchers has been simple all along: <strong>use serializable isolation</strong>.</p>
+          <p><strong>Serializable isolation is the strongest level: even though transactions execute in parallel, the end result is the same as if they had run one at a time</strong> — so if transactions behave correctly individually, they behave correctly concurrently; all race conditions prevented. Most databases providing it today use one of three techniques: <strong>literally executing transactions in a serial order</strong>, <strong>two-phase locking</strong> (for decades the only viable option), or <strong>optimistic techniques such as serializable snapshot isolation</strong>.</p>
+
+          <h3 id="s-serialexec">7.3.1 — Actual serial execution</h3>
+          <p>The simplest way to avoid concurrency problems: <strong>remove the concurrency entirely</strong> — execute one transaction at a time, in serial order, on a single thread. No conflict detection or prevention needed; the isolation is serializable by definition. The idea seems obvious, but database designers only considered it feasible around <strong>2007</strong>. What changed?</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>RAM got cheap</h4><p>The entire active dataset can live in memory for many use cases — transactions that would wait on disk become fast, in-memory operations.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>OLTP transactions are short</h4><p>They make a small number of reads and writes. Long-running analytic queries are typically read-only and run on a consistent snapshot <em>outside</em> the serial loop.</p></div></div>
+          </div>
+          <p>Implemented in <strong>VoltDB/H-Store, Redis, and Datomic</strong>. A system designed for single-threaded execution can beat a concurrent one by avoiding locking overhead — but throughput is capped at a single CPU core.</p>
+
+          <h4>Encapsulating transactions in stored procedures</h4>
+          <p>Early database thinking imagined a transaction spanning an entire user activity — booking an airline ticket: search, decide, book seats on each flight, enter details, pay, all atomic. But <strong>humans are slow to make up their minds</strong>, and a database waiting for user input would have to juggle a huge number of mostly-idle transactions. So OLTP apps keep transactions short: on the web, a transaction commits within a single HTTP request; a new request starts a new transaction.</p>
+          <p>Even with the human out of the loop, transactions remained <em>interactive</em>: one statement at a time, results shuttling between application and database over the network. On a single-threaded database, that style would be dreadful — the thread would sit idle waiting for each next query. So systems with single-threaded serial processing <strong>require the whole transaction as a stored procedure</strong>, submitted ahead of time:</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 7-9 (recreated) · Interactive transaction vs. stored procedure</p>
+            <svg viewBox="0 0 780 320" role="img" aria-label="An interactive transaction spends most of its time in network round trips between application and database; a stored procedure runs entirely inside the database" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr7b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+                <marker id="arr7c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+              </defs>
+              <text x="200" y="24" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="11">INTERACTIVE — one statement at a time</text>
+              <rect x="80" y="40" width="120" height="34" rx="8" fill="#1a2133" stroke="#f0b35c"/>
+              <text x="140" y="61" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="10">application</text>
+              <rect x="280" y="40" width="120" height="34" rx="8" fill="#1a2133" stroke="#63dfc2"/>
+              <text x="340" y="61" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10">database</text>
+              <line x1="205" y1="86" x2="275" y2="86" stroke="#f0b35c" stroke-width="1.6" marker-end="url(#arr7b)"/>
+              <text x="240" y="80" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="8.5">query 1</text>
+              <line x1="275" y1="106" x2="205" y2="106" stroke="#63dfc2" stroke-width="1.6" marker-end="url(#arr7c)"/>
+              <text x="240" y="100" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="8.5">result</text>
+              <line x1="205" y1="126" x2="275" y2="126" stroke="#f0b35c" stroke-width="1.6" marker-end="url(#arr7b)"/>
+              <text x="240" y="120" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="8.5">query 2</text>
+              <line x1="275" y1="146" x2="205" y2="146" stroke="#63dfc2" stroke-width="1.6" marker-end="url(#arr7c)"/>
+              <text x="240" y="140" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="8.5">result</text>
+              <line x1="205" y1="166" x2="275" y2="166" stroke="#f0b35c" stroke-width="1.6" marker-end="url(#arr7b)"/>
+              <text x="240" y="160" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="8.5">query 3</text>
+              <text x="240" y="196" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="9.5">most of the wall-clock time is network round-trips —</text>
+              <text x="240" y="210" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="9.5">a serial thread would idle through all the gaps</text>
+              <text x="580" y="24" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="11">STORED PROCEDURE — submitted once</text>
+              <rect x="460" y="40" width="120" height="34" rx="8" fill="#1a2133" stroke="#f0b35c"/>
+              <text x="520" y="61" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="10">application</text>
+              <rect x="660" y="40" width="100" height="34" rx="8" fill="rgba(99,223,194,0.09)" stroke="#63dfc2"/>
+              <text x="710" y="55" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">database,</text>
+              <text x="710" y="67" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">one thread</text>
+              <line x1="585" y1="86" x2="655" y2="86" stroke="#f0b35c" stroke-width="1.6" marker-end="url(#arr7b)"/>
+              <text x="620" y="80" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="8.5">submit txn code</text>
+              <rect x="490" y="100" width="280" height="92" rx="10" fill="#0f1420" stroke="#1e2740"/>
+              <text x="630" y="122" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9.5">entire transaction executes</text>
+              <text x="630" y="138" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9.5">in-memory, inside the database —</text>
+              <text x="630" y="154" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9.5">no network waits, no disk I/O</text>
+              <text x="630" y="176" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9">(whole data in memory)</text>
+              <line x1="655" y1="196" x2="585" y2="196" stroke="#63dfc2" stroke-width="1.6" marker-end="url(#arr7c)"/>
+              <text x="620" y="190" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="8.5">result</text>
+              <text x="390" y="248" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">with data in memory and the transaction as a stored procedure,</text>
+              <text x="390" y="264" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">single-threaded execution achieves good throughput</text>
+            </svg>
+            <p class="fig-caption">Provided all the data a transaction needs is in memory, the stored procedure runs very fast — no waiting for network or disk.</p>
+          </div>
+
+          <h4>Pros and cons of stored procedures</h4>
+          <p>Stored procedures have been part of the SQL standard since 1999 (SQL/PSM) and carry a bad reputation: every vendor has its own language (PL/SQL, T-SQL, PL/pgSQL) that hasn’t kept up with general-purpose languages; code running in a database is harder to manage — debug, version, deploy, test, monitor; and a database is more performance-sensitive than an app server, shared by many application servers, so a badly written procedure causes more trouble. <strong>But these are solvable:</strong> modern implementations use general-purpose languages — VoltDB uses Java or Groovy, Datomic Java or Clojure, Redis Lua. VoltDB also uses stored procedures for <em>replication</em>: instead of copying writes to each replica, it executes the same procedure on each — which requires the procedures to be <strong>deterministic</strong> (same result on every node; the current time via special deterministic APIs, for example).</p>
+
+          <h4>Partitioning</h4>
+          <p>Serial execution caps throughput at one CPU core. Read-only transactions can run elsewhere under snapshot isolation — but for high write throughput, <strong>partition the data</strong> (VoltDB supports this): if each transaction only touches one partition, each partition runs its own transaction thread independently, and throughput scales linearly with cores. Any transaction spanning multiple partitions must be coordinated in <strong>lock-step across all partitions it touches</strong> — and that is vastly slower:</p>
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-value red">~1,000</span>
+              <span class="stat-label">Cross-partition writes per second in VoltDB</span>
+              <span class="stat-note">orders of magnitude below single-partition throughput — and not improved by adding more machines</span>
+            </div>
+          </div>
+          <p>Whether transactions can stay single-partition depends on the data structure: simple key-value data partitions easily; data with multiple secondary indexes likely requires a lot of cross-partition coordination. (If a transaction needs data that isn’t in memory, the best answer may be to abort it, fetch the data into memory asynchronously, and restart it when loaded — <strong>anti-caching</strong>.)</p>
+
+          <h4>Summary of serial execution</h4>
+          <ul class="checklist">
+            <li>Every transaction must be <strong>small and fast</strong> — one slow transaction stalls everything.</li>
+            <li>The <strong>active dataset must fit in memory</strong>; rarely-accessed data on disk would make single-threaded transactions very slow.</li>
+            <li><strong>Write throughput must fit on one CPU core</strong> — or transactions must partition cleanly without cross-partition coordination.</li>
+            <li><strong>Cross-partition transactions are possible but hard-limited</strong> in how much they can be used.</li>
+          </ul>
+
+          <h3 id="s-2pl">7.3.2 — Two-phase locking (2PL)</h3>
+          <div class="callout warn">
+            <p class="callout-title">2PL ≠ 2PC</p>
+            <p>Two-phase <em>locking</em> sounds like two-phase <em>commit</em>, but they are completely different things. 2PC belongs to Chapter 9.</p>
+          </div>
+          <p>For around <strong>30 years</strong>, there was only one widely used algorithm for serializability: 2PL (sometimes “strong strict two-phase locking”, SS2PL). The idea extends the row locks you’ve already seen: several transactions may read the same object concurrently <em>as long as nobody is writing it</em> — but the moment anyone wants to write, exclusive access is required:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Readers block writers</h4><p>If transaction A has read an object and B wants to write it, B must wait until A commits or aborts — B can’t change the object behind A’s back.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Writers block readers</h4><p>If A has written an object and B wants to read it, B waits until A commits or aborts — reading an old version mid-write is not acceptable under 2PL.</p></div></div>
+          </div>
+          <p>Compare with snapshot isolation’s mantra — <strong>readers never block writers, and writers never block readers</strong> — that’s the key difference. Because 2PL is serializable, it protects against everything discussed in this chapter, including lost updates and write skew.</p>
+
+          <h4>Implementation</h4>
+          <p>Used by the serializable isolation level in <strong>MySQL (InnoDB) and SQL Server</strong>, and the repeatable read level in <strong>DB2</strong>. Each object has a lock in either <strong>shared mode</strong> or <strong>exclusive mode</strong>:</p>
+          <ul class="checklist">
+            <li>To <strong>read</strong> an object: acquire the lock in shared mode — several transactions can hold it at once, but an existing exclusive lock means waiting.</li>
+            <li>To <strong>write</strong>: acquire it in exclusive mode — nobody else may hold it in any mode.</li>
+            <li>Read-then-write upgrades a shared lock to exclusive — same as acquiring exclusive directly.</li>
+            <li>Locks are held <strong>until the end of the transaction</strong> — that’s the “two phases”: acquire while executing, release all at commit/abort.</li>
+          </ul>
+          <p>With so many locks in play, <strong>deadlock</strong> is easy: A waits for B’s lock while B waits for A’s. The database detects deadlocks automatically and <strong>aborts one of the transactions</strong> so the others can proceed — the aborted one is retried by the application.</p>
+
+          <h4>Performance of two-phase locking</h4>
+          <p>The big downside, and why 2PL isn’t used everywhere: <strong>transaction throughput and response times are significantly worse</strong> than under weak isolation — partly lock overhead, but mostly <em>reduced concurrency</em>: if two transactions try to do anything that might race, one waits. Traditional databases don’t limit transaction duration, so there’s no limit on how long a wait may last; queues form; latencies become unstable and terrible at high percentiles under contention — one slow or lock-hungry transaction can grind the whole system to a halt. Deadlocks are also much more frequent under 2PL serializable than in lock-based read committed, and every deadlock-aborted transaction has to do all its work again — significant wasted effort.</p>
+
+          <h4>Predicate locks</h4>
+          <p>A serializable database must also prevent <strong>phantoms</strong>: if one transaction searched for bookings of room 123 at noon–1pm, no other transaction may concurrently insert a conflicting booking. A <strong>predicate lock</strong> belongs not to one object but to <em>all objects matching some search condition</em> — e.g., the rows matched by <code>SELECT * FROM bookings WHERE room_id = 123 AND end_time &gt; '2018-01-01 12:00' AND start_time &lt; '2018-01-01 13:00'</code>:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Shared predicate lock on reads</h4><p>Transaction A reading objects matching a condition acquires a shared-mode predicate lock on those conditions; if B holds an exclusive lock on any matching object, A waits.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Exclusive check on writes</h4><p>Before inserting, updating, or deleting any object, check whether its old or new value matches any existing predicate lock — if so, wait for that transaction to commit or abort.</p></div></div>
+          </div>
+          <p>The key idea: <strong>a predicate lock applies even to objects that do not yet exist</strong> — the phantoms that might be added in the future. 2PL with predicate locks prevents all write skew and race conditions, and the isolation becomes serializable.</p>
+
+          <h4>Index-range locks (next-key locking)</h4>
+          <p>Predicate locks perform poorly — checking many locks for matches is time-consuming. So most 2PL databases implement <strong>index-range locking</strong>, a simplified approximation: it’s safe to simplify a predicate to match a <em>greater</em> set of objects. The room-123-noon-to-1pm predicate can be approximated by locking <em>all</em> bookings of room 123 at any time, or <em>all</em> rooms between noon and 1pm — any write matching the original predicate definitely matches the approximation. In practice the database attaches the lock to an <strong>index entry</strong> (a room_id index entry, or a range in a time-based index), and a conflicting writer touching that part of the index encounters it and waits. Less precise than predicate locks — it may lock more than strictly necessary — but much cheaper, so a good compromise. With no suitable index to attach to, the fallback is a shared lock on the <strong>entire table</strong>: safe, but it stops all other transactions writing to that table.</p>
+
+          <h3 id="s-ssi">7.3.3 — Serializable snapshot isolation (SSI)</h3>
+          <p>The chapter’s bleak picture: serializability implementations that don’t perform well (2PL) or don’t scale (serial execution), versus weak isolation levels that perform but allow race conditions. Are serializability and good performance fundamentally at odds? <strong>Perhaps not.</strong> SSI provides full serializability with only a small performance penalty compared to snapshot isolation. It’s young — first described in <strong>2008</strong>, the subject of Michael Cahill’s PhD thesis — used in single-node databases (the serializable isolation level in <strong>PostgreSQL since 9.1</strong>) and distributed ones (FoundationDB uses a similar algorithm).</p>
+
+          <h4>Pessimistic vs. optimistic concurrency control</h4>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Pessimistic — 2PL</h4>
+              <p>If anything might possibly go wrong (a lock held elsewhere), wait until it’s safe. Like mutual exclusion in multi-threaded programming. <strong>Serial execution is pessimism to the extreme</strong> — one transaction effectively holding an exclusive lock on the entire database, compensated by making each transaction very fast.</p>
+            </div>
+            <div class="term">
+              <h4>Optimistic — SSI</h4>
+              <p>Transactions run anyway, hoping everything turns out fine; at commit, the database checks whether isolation was violated, and only transactions that executed serializably are allowed to commit — the others abort and retry.</p>
+            </div>
+          </div>
+          <p>Optimistic control is an old idea with known weaknesses: it performs badly under <strong>high contention</strong> (many transactions abort and retry, and retries add load to an already strained system). With enough spare capacity and moderate contention, it tends to beat pessimistic approaches — and contention can be reduced with <strong>commutative atomic operations</strong> (concurrent counter increments can all apply without conflict, as long as none of them reads the counter too). SSI is based on snapshot isolation — all reads from a consistent snapshot — and adds an algorithm for detecting serialization conflicts among writes and deciding whom to abort.</p>
+
+          <h4>Decisions based on an outdated premise</h4>
+          <p>The recurring pattern from write skew: a transaction reads data, decides, and writes based on what it saw. Put another way, the transaction acts on a <strong>premise</strong> — a fact true at the beginning (“there are two doctors on call”) — which may no longer be true at commit time. The database can’t know how the application uses query results, so it must assume any change in the result means the writes may be invalid: there may be a <strong>causal dependency between the queries and the writes</strong>, and to provide serializability it must detect when a transaction acted on an outdated premise and abort it. Two cases to detect:</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 7-10 (recreated) · Detecting stale MVCC reads</p>
+            <svg viewBox="0 0 780 310" role="img" aria-label="Transaction 43's snapshot ignores transaction 42's uncommitted write; 42 commits; when 43 wants to commit, its premise is stale so it must abort" style="width:100%;height:auto;display:block">
+              <line x1="52" y1="60" x2="52" y2="226" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="728" y1="60" x2="728" y2="226" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <text x="52" y="40" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">TXN 42</text>
+              <text x="728" y="40" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">TXN 43</text>
+              <circle cx="90" cy="80" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="84" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">1</text>
+              <rect x="108" y="66" width="300" height="30" rx="8" fill="#151c30" stroke="#f0b35c"/>
+              <text x="258" y="85" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">UPDATE Alice on_call=false (uncommitted)</text>
+              <circle cx="690" cy="120" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="124" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">2</text>
+              <rect x="392" y="106" width="290" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="537" y="125" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">snapshot: read doctors → Alice on_call</text>
+              <text x="537" y="144" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9">(42’s write ignored — uncommitted at snapshot time)</text>
+              <circle cx="90" cy="176" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="180" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">3</text>
+              <rect x="108" y="162" width="160" height="30" rx="8" fill="rgba(240,179,92,0.1)" stroke="#f0b35c"/>
+              <text x="188" y="181" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="10.5">commit ✓</text>
+              <circle cx="690" cy="216" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="220" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">4</text>
+              <rect x="382" y="202" width="310" height="30" rx="8" fill="rgba(239,128,128,0.08)" stroke="#ef8080"/>
+              <text x="537" y="221" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10.5">43 wants to commit → ABORT</text>
+              <rect x="205" y="252" width="370" height="44" rx="10" fill="rgba(239,128,128,0.06)" stroke="#ef8080" stroke-dasharray="5 4"/>
+              <text x="390" y="270" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">the write 43 ignored when reading the snapshot</text>
+              <text x="390" y="286" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">has now taken effect — the premise “Alice on call” is stale</text>
+            </svg>
+            <p class="fig-caption">The database tracks when a transaction ignores another’s writes due to MVCC visibility rules; at commit, it checks whether any ignored write has since committed. If so — abort.</p>
+          </div>
+
+          <div class="callout note">
+            <p class="callout-title">Why wait until committing?</p>
+            <p>Why not abort transaction 43 the moment the stale read is detected? Because at read time the database doesn’t yet know whether 43 will write anything — if it’s read-only, there’s no risk of write skew, and aborting it would be unnecessary. The other transaction may also abort or still be uncommitted at 43’s commit time — in which case the read wasn’t stale after all. Waiting avoids unnecessary aborts and preserves snapshot isolation’s support for long-running reads on a consistent snapshot.</p>
+          </div>
+
+          <div class="figure">
+            <p class="fig-head">Figure 7-11 (recreated) · Detecting writes that affect prior reads</p>
+            <svg viewBox="0 0 780 330" role="img" aria-label="Transactions 42 and 43 both read the shift 1234 index entry; when 43 writes, a tripwire notifies 42; 42 commits first and wins; 43 aborts" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr7d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#ef8080"/>
+                </marker>
+              </defs>
+              <line x1="52" y1="60" x2="52" y2="256" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="728" y1="60" x2="728" y2="256" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <text x="52" y="40" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">TXN 42</text>
+              <text x="728" y="40" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">TXN 43</text>
+              <circle cx="90" cy="80" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="84" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">1</text>
+              <rect x="108" y="66" width="300" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="258" y="85" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">SELECT doctors WHERE shift_id = 1234</text>
+              <circle cx="690" cy="120" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="124" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">2</text>
+              <rect x="382" y="106" width="300" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="532" y="125" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">SELECT doctors WHERE shift_id = 1234</text>
+              <text x="390" y="160" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9.5">index entry “1234” records that both 42 and 43 read this data</text>
+              <circle cx="690" cy="196" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="200" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">3</text>
+              <rect x="382" y="182" width="300" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="532" y="201" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">43 writes — tripwire notifies 42</text>
+              <line x1="380" y1="197" x2="425" y2="197" stroke="#ef8080" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#arr7d)"/>
+              <circle cx="90" cy="236" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="90" y="240" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">4</text>
+              <rect x="108" y="222" width="210" height="30" rx="8" fill="rgba(240,179,92,0.1)" stroke="#f0b35c"/>
+              <text x="213" y="241" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="10.5">42 commits first — wins ✓</text>
+              <circle cx="690" cy="276" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="690" y="280" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">5</text>
+              <rect x="382" y="262" width="300" height="30" rx="8" fill="rgba(239,128,128,0.08)" stroke="#ef8080"/>
+              <text x="532" y="281" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10.5">43 commits → conflicting write took effect → ABORT</text>
+            </svg>
+            <p class="fig-caption">Like index-range locks, but the locks don’t block: a write into a range other transactions have read acts as a <strong>tripwire</strong>, notifying them that their read may be outdated. First committer wins; the other transaction aborts when its own commit finds the conflicting write already committed.</p>
+          </div>
+
+          <p>In Figure 7-11, transactions 42 and 43 both search for on-call doctors in shift 1234; the index entry records both readers (table level if there’s no index). When 43 writes, it notifies 42 — and vice versa. Transaction 42 commits first and succeeds (43’s write hasn’t taken effect yet, since 43 hasn’t committed). When 43 commits, 42’s already-committed write makes the conflict real — so 43 aborts.</p>
+
+          <h4>Performance of SSI</h4>
+          <p>Engineering details decide how well it works — notably the <strong>granularity of read/write tracking</strong>: detailed tracking is precise about who must abort but expensive to maintain; coarse tracking is faster but aborts more transactions than strictly necessary. PostgreSQL uses theory to prove some overwrites are harmless and reduce unnecessary aborts. The advantages over 2PL: <strong>no lock waiting</strong> — writers don’t block readers and vice versa, so query latency is more predictable, and read-only queries run lock-free on a consistent snapshot (great for read-heavy workloads). The advantages over serial execution: <strong>not limited to one CPU core</strong> — FoundationDB distributes conflict detection across machines, scaling to high throughput with transactions that touch multiple partitions. The main sensitivity: the abort rate — read-write transactions must be fairly short (long-running <em>read-only</em> transactions are fine), though SSI is probably less sensitive to slow transactions than 2PL or serial execution.</p>
+        </section>
+
+        <!-- ================= 7.4 ================= -->
+        <section class="block reveal" id="s-summary">
+          <p class="kicker">7.4 <span class="dim">·</span> Pulling it together</p>
+          <h2>Summary</h2>
+          <p>Transactions are an abstraction that lets an application pretend certain concurrency problems and certain faults don’t exist — a large class of errors collapses into a simple transaction abort, and the application just tries again. The chapter went deep on concurrency control: read committed, snapshot isolation (often called repeatable read), and serializable, characterized by the race conditions each permits. The race conditions, for the record:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Dirty reads</h4><p>One client reads another client’s writes before they commit. Prevented by read committed and stronger.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Dirty writes</h4><p>One client overwrites data another has written but not committed. Prevented by almost all transaction implementations.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Read skew (nonrepeatable reads)</h4><p>A client sees different parts of the database at different points in time. Prevented by snapshot isolation / MVCC.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>Lost updates</h4><p>Two concurrent read-modify-write cycles; one clobbers the other. Some snapshot isolation implementations prevent it automatically; others need a manual <code>SELECT FOR UPDATE</code>.</p></div></div>
+            <div class="num-card"><span class="n">5.</span><div><h4>Write skew</h4><p>A transaction decides on a premise that is no longer true when it commits. Only serializable isolation prevents it.</p></div></div>
+            <div class="num-card"><span class="n">6.</span><div><h4>Phantom reads</h4><p>A write changes the result of another transaction’s search. Snapshot isolation handles read-only cases; write-skew phantoms need index-range locks or serializability.</p></div></div>
+          </div>
+          <p>And the three approaches to serializable transactions:</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Approach</th><th>The idea</th><th>The catch</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Actual serial execution</strong></td><td>Literally one transaction at a time on a single thread, transactions as fast stored procedures</td><td>Great if transactions are tiny, data fits in memory, and throughput fits one core — otherwise partitioning, with slow cross-partition coordination</td></tr>
+                <tr><td><strong>Two-phase locking</strong></td><td>Shared/exclusive locks with predicate or index-range locks for phantoms; writers block readers and vice versa</td><td>The decades-old standard — but poor, unstable performance under contention, and frequent deadlocks</td></tr>
+                <tr><td><strong>Serializable snapshot isolation</strong></td><td>Optimistic: run on snapshots, track read-write dependencies, abort at commit if execution wasn’t serializable</td><td>Needs spare capacity; aborts hurt under high contention; read-write transactions must be short</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>The examples used a relational data model, but transactions are valuable with any data model. And this chapter stayed (mostly) on a single machine — distributed transactions open a new set of difficult challenges, in the next two chapters.</p>
+
+          <h3>Glossary</h3>
+          <dl class="kv">
+            <div class="kv-row"><dt>transaction</dt><dd>Grouping several reads and writes into a logical unit: either all succeed (commit) or all are undone (abort/rollback) and can safely be retried.</dd></div>
+            <div class="kv-row"><dt>ACID</dt><dd>Atomicity, Consistency, Isolation, Durability — coined 1983 by Härder and Reuter; in practice, one database’s ACID ≠ another’s, and the term is mostly marketing now.</dd></div>
+            <div class="kv-row"><dt>BASE</dt><dd>Basically Available, Soft state, Eventual consistency — i.e., “not ACID”; even vaguer than ACID.</dd></div>
+            <div class="kv-row"><dt>atomicity (ACID sense)</dt><dd>Not about concurrency: if a fault occurs partway through a multi-write transaction, it aborts and all its writes are discarded. Really <em>abortability</em>.</dd></div>
+            <div class="kv-row"><dt>consistency (ACID sense)</dt><dd>The application’s own invariants being preserved — an application property, not a database property; the C doesn’t really belong in ACID.</dd></div>
+            <div class="kv-row"><dt>isolation</dt><dd>Concurrent transactions can’t step on each other’s toes; formally, serializability — the result is as if each ran alone.</dd></div>
+            <div class="kv-row"><dt>durability</dt><dd>Once committed, data survives hardware faults and crashes — via disk (WAL) or replication to some number of nodes. Perfect durability does not exist.</dd></div>
+            <div class="kv-row"><dt>read uncommitted</dt><dd>An even weaker level than read committed: prevents dirty writes but allows dirty reads.</dd></div>
+            <div class="kv-row"><dt>dirty read</dt><dd>Reading another transaction’s writes before they commit — you might see data that later gets rolled back.</dd></div>
+            <div class="kv-row"><dt>dirty write</dt><dd>Overwriting a value another transaction has written but not committed — the used-car mix-up.</dd></div>
+            <div class="kv-row"><dt>read committed</dt><dd>The most basic practical level: no dirty reads, no dirty writes. Default in Oracle 11g, PostgreSQL, SQL Server 2012, MemSQL.</dd></div>
+            <div class="kv-row"><dt>read skew / nonrepeatable read</dt><dd>Seeing different parts of the database at different points in time — Alice’s $900.</dd></div>
+            <div class="kv-row"><dt>snapshot isolation</dt><dd>Each transaction reads from a consistent snapshot of the database as of its start; implemented with MVCC.</dd></div>
+            <div class="kv-row"><dt>repeatable read</dt><dd>The SQL standard’s name for a level that looks like snapshot isolation; the definition is so ambiguous that nobody really knows what it means.</dd></div>
+            <div class="kv-row"><dt>MVCC</dt><dd>Multi-version concurrency control — keeping several committed versions of objects side by side so readers never block writers and vice versa.</dd></div>
+            <div class="kv-row"><dt>created_by / deleted_by</dt><dd>Per-row bookkeeping in PostgreSQL-style MVCC: which transaction created the version, and which marked it deleted; updates are a delete + create.</dd></div>
+            <div class="kv-row"><dt>garbage collection (MVCC)</dt><dd>Background cleanup of versions and deleted rows that no transaction can still see.</dd></div>
+            <div class="kv-row"><dt>append-only / copy-on-write B-tree</dt><dd>B-tree variant that copies modified pages up to a new root; each root is a consistent snapshot (CouchDB, Datomic, LMDB).</dd></div>
+            <div class="kv-row"><dt>lost update</dt><dd>Two concurrent read-modify-write cycles; the later write clobbers the earlier without incorporating its change.</dd></div>
+            <div class="kv-row"><dt>cursor stability</dt><dd>Implementing atomic single-object operations by taking an exclusive lock on the object when it’s read.</dd></div>
+            <div class="kv-row"><dt>compare-and-set</dt><dd>An update that applies only if the value hasn’t changed since you last read it — safe only if the WHERE clause doesn’t read an old snapshot.</dd></div>
+            <div class="kv-row"><dt>write skew</dt><dd>Two transactions read the same objects, make decisions on a premise, and write to <em>different</em> objects — the premise breaks. Only serializable prevents it.</dd></div>
+            <div class="kv-row"><dt>phantom</dt><dd>A write in one transaction changes the result of another transaction’s search query — often a row that didn’t exist when the query ran.</dd></div>
+            <div class="kv-row"><dt>materializing conflicts</dt><dd>Introducing artificial lock objects (e.g., a room × 15-minute-slot table) so a phantom becomes a lock conflict on real rows — a last resort.</dd></div>
+            <div class="kv-row"><dt>serializable isolation</dt><dd>The strongest level: the end result is the same as if transactions had run one at a time, whether or not they actually did.</dd></div>
+            <div class="kv-row"><dt>actual serial execution</dt><dd>One transaction at a time on a single thread — serializable by definition (VoltDB/H-Store, Redis, Datomic).</dd></div>
+            <div class="kv-row"><dt>stored procedure</dt><dd>Transaction code submitted to the database ahead of time so it can execute without network round trips — required by single-threaded systems.</dd></div>
+            <div class="kv-row"><dt>deterministic (stored procedures)</dt><dd>Producing the same result on every replica — VoltDB replicates by re-executing the same procedure, so time comes from deterministic APIs.</dd></div>
+            <div class="kv-row"><dt>anti-caching</dt><dd>Aborting a transaction that needs off-disk data, fetching it into memory asynchronously, and restarting the transaction once loaded.</dd></div>
+            <div class="kv-row"><dt>two-phase locking (2PL)</dt><dd>Serializability via shared/exclusive locks held to end of transaction — writers block readers and vice versa. Completely different from 2PC.</dd></div>
+            <div class="kv-row"><dt>shared / exclusive lock</dt><dd>Shared: many simultaneous readers. Exclusive: one writer, nobody else. Read-then-write upgrades shared to exclusive.</dd></div>
+            <div class="kv-row"><dt>deadlock</dt><dd>A waits for B’s lock while B waits for A’s; the database detects it and aborts one transaction for the application to retry.</dd></div>
+            <div class="kv-row"><dt>predicate lock</dt><dd>A lock on all objects matching a search condition — including objects that don’t exist yet (phantoms).</dd></div>
+            <div class="kv-row"><dt>index-range lock / next-key locking</dt><dd>An approximation of a predicate lock attached to an index entry or range — less precise, much cheaper; fallback is a table lock.</dd></div>
+            <div class="kv-row"><dt>pessimistic concurrency control</dt><dd>If something might go wrong, wait until it’s safe — 2PL; serial execution is the extreme case.</dd></div>
+            <div class="kv-row"><dt>optimistic concurrency control</dt><dd>Proceed anyway and check at commit — SSI; performs badly under high contention, well with spare capacity.</dd></div>
+            <div class="kv-row"><dt>serializable snapshot isolation (SSI)</dt><dd>Full serializability on top of snapshot isolation: detect stale MVCC reads and write-after-read dependencies, abort only when necessary (PostgreSQL 9.1+, FoundationDB).</dd></div>
+            <div class="kv-row"><dt>premise</dt><dd>A fact true when a transaction started (“two doctors are on call”) that its decision depends on — possibly outdated by commit time.</dd></div>
+            <div class="kv-row"><dt>tripwire</dt><dd>In SSI, a write into a range others have read notifies them their data may be outdated — instead of blocking them.</dd></div>
+          </dl>
+
+          <h3>Further reading</h3>
+          <ul class="reading-list">
+            <li><strong>James Corbett et al., “Spanner: Google’s Globally-Distributed Database”</strong><span class="src">OSDI, April 2012 — the chapter’s epigraph, and a real system that chose transactions</span></li>
+            <li><strong>Hal Berenson et al., “A Critique of ANSI SQL Isolation Levels”</strong><span class="src">SIGMOD, May 1995 — where the anomaly definitions (and “repeatable read” confusion) really come from</span></li>
+            <li><strong>Atul Adya, “Weak Consistency: A Generalized Theory and Optimistic Implementations for Distributed Transactions”</strong><span class="src">PhD thesis, MIT, March 1999 — the formal modern treatment of isolation levels</span></li>
+            <li><strong>Michael J. Cahill, Uwe Röhm, and Alan Fekete, “Serializable Isolation for Snapshot Databases”</strong><span class="src">SIGMOD, June 2008 — the first SSI paper</span></li>
+            <li><strong>Dan R. K. Ports and Kevin Grittner, “Serializable Snapshot Isolation in PostgreSQL”</strong><span class="src">VLDB, August 2012 — how the theory became the 9.1 feature</span></li>
+            <li><strong>Martin Kleppmann, “Hermitage: Testing the ‘I’ in ACID”</strong><span class="src">martin.kleppmann.com, November 2014 — replaying the isolation anomalies against real databases</span></li>
+            <li><strong>Peter Bailis, Alan Fekete, et al., “Highly Available Transactions” / Kyle Kingsbury, “Call Me Maybe”</strong><span class="src">VLDB 2014 / aphyr.com — what weak isolation costs you in production, with receipts</span></li>
+          </ul>
+        </section>
+
+        <!-- ================= quiz ================= -->
+        <section class="quiz-wrap" id="quiz-section">
+          <div class="quiz-head">
+            <div>
+              <p class="kicker">Check yourself <span class="dim">· 13 questions</span></p>
+              <h2>Chapter 7 quiz</h2>
+              <p>Two written, eleven multiple-choice — ACID, anomalies, and the three roads to serializable.</p>
+            </div>
+            <span class="chip" id="quiz-last">no score yet</span>
+          </div>
+          <div id="quiz"></div>
+          <button class="mark-complete" id="mark-complete" type="button">Mark chapter complete</button>
+        </section>
+
+        <nav class="lesson-pager">
+          <a class="pager-link" href="chapter6.html">
+            <span class="dir">← Previous</span>
+            <span class="title">Partitioning</span>
+          </a>
+          <a class="pager-link next" href="chapter8.html">
+            <span class="dir">Next chapter →</span>
+            <span class="title">The Trouble with Distributed Systems</span>
+          </a>
+        </nav>
+
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container foot-inner">
+      <p>DDIA practice companion · a fan-made study aid for<br>“Designing Data-Intensive Applications” by Martin Kleppmann (O’Reilly)</p>
+      <p>static site · no trackers · progress in localStorage</p>
+    </div>
+  </footer>
+
+  <script>
+    window.QUIZ = {
+      lesson: 'chapter7',
+      questions: [
+        {
+          q: 'A transaction aborts halfway through several writes. Which ACID letter handled that, and what exactly does it promise? Then contrast with durability. Then reveal.',
+          short: true,
+          answer: 'Atomicity: if a fault occurs partway through a sequence of writes — a crash, network interruption, full disk, constraint violation — the transaction is aborted and the database discards or undoes all writes it made so far. The application can be sure an aborted transaction changed nothing, so it can safely retry. Importantly, ACID atomicity is not about concurrency (that’s isolation) — its defining feature is really abortability. Durability is the other side: once a transaction has committed, its writes won’t be forgotten even if there’s a hardware fault or crash — typically via a write-ahead log on nonvolatile storage, or replication to some number of nodes (with the caveat that perfect durability doesn’t exist).'
+        },
+        {
+          q: 'Why does the write-skew example evade unique constraints, and what are your prevention options when you can’t use serializable isolation? Then reveal.',
+          short: true,
+          answer: 'Because the two transactions write to different objects — each doctor updates their own record, so no single-object constraint is violated; the broken invariant (“at least one doctor on call”) spans multiple objects, and most databases can’t express such constraints (triggers or materialized views might). Contrast with claiming a username, where the uniqueness genuinely is one object and a unique constraint solves it. Options when serializable isn’t available: (1) atomic single-object operations don’t help (multiple objects involved); (2) automatic lost-update detection doesn’t catch write skew either; (3) if the write touches rows the initial query returned, use SELECT ... FOR UPDATE to lock them — the second transaction then blocks until the first commits and its re-check fails; (4) for phantoms (no rows to lock), materialize conflicts — introduce concrete lock objects like a table of room × 15-minute time slots — a last resort that leaks concurrency control into the data model.'
+        },
+        {
+          q: 'What exactly is a dirty read?',
+          options: [
+            'Reading the same row twice and getting different values',
+            'A transaction reads data written by another transaction that has not yet committed — so it may see data that is later rolled back and never actually exists',
+            'Reading from a follower that lags behind the leader',
+            'Reading a row without an index'
+          ],
+          answer: 1,
+          why: 'The risk: with multi-object writes, a dirty reader sees a partially-updated state (the new email but the stale counter), and if the writer aborts, the reader saw data that never committed. Read committed prevents it.'
+        },
+        {
+          q: 'A transaction actually succeeded, but the network dropped the acknowledgement — the client thinks it failed and retries. Why is this a retry problem?',
+          options: [
+            'It isn’t — the second attempt will also fail',
+            'The retry performs the transaction twice unless there’s an application-level deduplication mechanism — one of the five limitations of retrying aborted transactions',
+            'The database will detect the duplicate automatically in all cases',
+            'Only read-only transactions have this issue'
+          ],
+          answer: 1,
+          why: 'This is limitation #1 of retries: an aborted-vs-actually-committed ambiguity needs dedup. The others: retries worsen overload (limit counts, exponential backoff), only transient errors are worth retrying, side effects outside the database don’t roll back (the email gets sent twice — 2PC territory), and the retrying client itself can die and lose the data.'
+        },
+        {
+          q: 'Why do most databases prevent dirty reads by version tracking rather than read locks?',
+          options: [
+            'Read locks are not supported by SQL',
+            'With read locks, one long-running write transaction would force many read-only transactions to wait — bad for response time and operability. Version tracking just hands readers the old committed value until the write commits',
+            'Version tracking uses less disk space',
+            'Read locks only work on indexes'
+          ],
+          answer: 1,
+          why: 'While the write transaction holds the row lock, the database remembers both the old committed value and the new one; readers get the old value and never block. (DB2 and SQL Server with read_committed_snapshot=off are the mainstream exceptions that use locks.)'
+        },
+        {
+          q: 'Alice has $500 in each of two accounts and a transfer is mid-flight. She reads $400 in one and $500 in the other. What is the anomaly, and what fixes it?',
+          options: [
+            'A dirty read; fixed by read committed',
+            'A lost update; fixed by SELECT FOR UPDATE',
+            'Read skew (a nonrepeatable read); fixed by snapshot isolation, where her whole transaction reads one consistent point-in-time view',
+            'A phantom; fixed by an index-range lock'
+          ],
+          answer: 2,
+          why: 'Everything Alice saw was committed when she read it — read committed is satisfied. Snapshot isolation gives each transaction a consistent snapshot (all data committed at its start), which also makes backups and analytic scans coherent.'
+        },
+        {
+          q: 'Why does transaction 12 read account 2’s balance as $500 in Figure 7-7, even though transaction 13 already wrote $400?',
+          options: [
+            'Transaction 12 read a cached result',
+            'The MVCC visibility rules: writes by transaction 13 are invisible to 12 because 13 has a later transaction ID — both the deletion of the $500 row and the creation of the $400 row are ignored until 13 commits (and even then, only for transactions starting later)',
+            'The $400 write was rolled back',
+            'Transaction 12 holds an exclusive lock on the row'
+          ],
+          answer: 1,
+          why: 'The four rules: ignore in-progress transactions’ writes, ignore aborted ones, ignore later-transaction-ID ones, see everything else. An object is visible if its creator committed before the reader started and it isn’t marked deleted (or the deleter hadn’t committed at the reader’s start).'
+        },
+        {
+          q: 'Which naming fact about “repeatable read” is TRUE from the chapter?',
+          options: [
+            'It is precisely defined by the SQL standard and all databases agree on it',
+            'PostgreSQL and MySQL call snapshot isolation “repeatable read”; Oracle calls snapshot isolation “serializable”; DB2 uses “repeatable read” to mean actual serializability',
+            'It always means serializable',
+            'It was invented to replace snapshot isolation in the 2000s'
+          ],
+          answer: 1,
+          why: 'The SQL standard predates snapshot isolation, so it defines something that only looks similar. The standard is ambiguous and imprecise — implementations differ wildly despite “standardization,” and even the formal research definition isn’t met by most. Nobody really knows what repeatable read means.'
+        },
+        {
+          q: 'In a replicated database with multi-leader or leaderless replication, why don’t locks or compare-and-set prevent lost updates?',
+          options: [
+            'They are too slow over the network',
+            'They assume a single up-to-date copy of the data — but concurrent writes on different nodes mean no such copy exists. The approach instead is siblings merged by the application (or CRDTs), or commutative atomic operations like counters',
+            'Replicas cannot acquire locks',
+            'Compare-and-set only works on strings'
+          ],
+          answer: 1,
+          why: 'Chapter 5 returns here: Riak 2.0 datatypes merge commutative updates automatically so none are lost — while last write wins, the default in many replicated databases, is itself prone to lost updates.'
+        },
+        {
+          q: 'What is a phantom, in this chapter’s sense?',
+          options: [
+            'A deleted row that reappears after a crash',
+            'A ghost process holding locks',
+            'A write in one transaction that changes the result of a search query in another transaction — often a newly-inserted row matching a condition the other transaction checked to be empty',
+            'An index entry pointing to no row'
+          ],
+          answer: 2,
+          why: 'The pattern: a SELECT checks a precondition, the app decides, then the write invalidates the precondition. If the check found no rows, there’s nothing for SELECT FOR UPDATE to lock — hence predicate locks, index-range locks, or materializing conflicts.'
+        },
+        {
+          q: 'How does materializing conflicts work for the meeting room system?',
+          options: [
+            'It pre-computes all possible bookings',
+            'It duplicates the bookings table into a faster one',
+            'You pre-create a table of room × 15-minute time-slot rows (e.g., the next six months); a booking transaction first SELECT FOR UPDATE locks the rows for its room and period, converting the phantom into a lock conflict on concrete rows. The table stores no booking data — it is purely locks. A last resort',
+            'It stores conflicts in a log for the DBA to resolve'
+          ],
+          answer: 2,
+          why: 'It’s hard to design well and ugly to leak concurrency control into the data model — which is why serializable isolation is preferable in most cases.'
+        },
+        {
+          q: 'Under two-phase locking, how are deadlocks handled, and what is 2PL’s key difference from snapshot isolation?',
+          options: [
+            'Deadlocks are prevented by ordering all transactions; the difference is 2PL is always faster',
+            'Deadlocks can’t happen under 2PL; the difference is index usage',
+            'The database detects deadlocks and aborts one transaction (the application retries it). The difference: under 2PL, writers block readers and readers block writers — snapshot isolation lets them proceed past each other',
+            'Deadlocks are resolved by a human; the difference is 2PL needs no locks'
+          ],
+          answer: 2,
+          why: 'Writers blocking readers (and vice versa) is exactly what makes 2PL serializable — but also what makes its performance poor and its latencies unstable under contention, with frequent deadlock-abort-retry cycles adding wasted work.'
+        },
+        {
+          q: 'Why does SSI wait until commit time to abort a transaction that read stale data, rather than aborting the moment the stale read happens?',
+          options: [
+            'To keep logs smaller',
+            'Because at read time the database doesn’t know if the transaction will write at all (a read-only transaction risks no write skew), and the other transaction may still abort or be uncommitted at this one’s commit — so the read may not have been stale after all. Waiting avoids unnecessary aborts and keeps long-running snapshot reads viable',
+            'Because aborts are only allowed at the end of the day',
+            'Because it cannot detect stale reads until then'
+          ],
+          answer: 1,
+          why: 'That’s the optimistic bet: proceed, track the dangerous dependencies (stale MVCC reads and write-after-read tripwires), and only abort at commit if the conflict actually materialized. First committer wins; the loser retries.'
+        }
+      ]
+    };
+  </script>
+  <script src="../js/shared.js"></script>
+  <script src="../js/quiz.js"></script>
+  <script src="../js/toc.js"></script>
+</body>
+</html>

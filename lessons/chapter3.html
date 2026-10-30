@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chapter 3 · Storage and Retrieval — DDIA Practice</title>
+  <meta name="description" content="A comprehensive study guide to Chapter 3 of Designing Data-Intensive Applications: the bash key-value store, hash indexes, SSTables and LSM-trees, B-trees, other indexing structures, OLTP vs OLAP, star schemas, and column-oriented storage.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d14'/%3E%3Cpath d='M16 6l9 10-9 10-9-10z' fill='%23f0b35c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Spline+Sans:wght@300..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
+  
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-active="lessons" class="is-lesson">
+
+  <div class="reading-progress" id="readingProgress" aria-hidden="true"></div>
+
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="../index.html">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <rect x="1" y="2" width="16" height="4" rx="1.5" stroke="#f0b35c" stroke-width="1.6"/>
+          <rect x="1" y="7" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+          <rect x="1" y="12" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+        </svg>
+        DDIA&nbsp;<span class="dim">/ practice</span>
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="../index.html" data-nav="home">Home</a>
+        <a href="../index.html#lessons" data-nav="lessons">Lessons</a>
+        <a href="../flashcards.html" data-nav="flashcards">Flashcards</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+
+    <div class="lesson-hero">
+      <span class="lesson-hero-num" aria-hidden="true">3</span>
+      <div class="container">
+        <a class="crumb" href="../index.html#lessons">← All chapters</a>
+        <p class="kicker">Chapter 03 <span class="dim">· Part I — Foundations</span></p>
+        <h1>Storage and Retrieval</h1>
+        <p class="lede">At the most fundamental level, a database does two things: store data, and give it back. This chapter is the same story as Chapter 2, told from the database’s side of the API.</p>
+        <div class="lesson-meta">
+          <span class="chip">Logs &amp; indexes</span>
+          <span class="chip">LSM-trees</span>
+          <span class="chip">B-trees</span>
+          <span class="chip">OLTP vs OLAP</span>
+          <span class="chip">Column stores</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pullquote container">
+      <p>“Wer Ordnung hält, ist nur zu faul zum Suchen.”</p>
+      <cite>— German proverb: “If you keep things tidily ordered, you’re just too lazy to go searching.”</cite>
+    </div>
+
+    <div class="chapter-layout container">
+
+      <aside class="toc" aria-label="Chapter contents">
+        <p class="toc-title">Ch 3 contents</p>
+        <ul>
+          <li><a href="#s-intro">3.0 The 3 AM mystery</a></li>
+          <li><a href="#s-structures">3.1 The simplest database</a></li>
+          <li><a href="#s-hash">3.2 Hash indexes</a></li>
+          <li><a href="#s-sstable">3.3 SSTables &amp; LSM-trees</a></li>
+          <li><a href="#s-btree">3.4 B-trees</a></li>
+          <li><a href="#s-compare">3.5 LSM vs. B-tree</a></li>
+          <li><a href="#s-other">3.6 Other index structures</a></li>
+          <li><a href="#s-oltp">3.7 OLTP vs. OLAP</a></li>
+          <li><a href="#s-star">3.8 Stars &amp; snowflakes</a></li>
+          <li><a href="#s-column">3.9 Column storage</a></li>
+          <li><a href="#s-summary">3.10 Summary &amp; glossary</a></li>
+          <li><a href="#quiz-section">Quiz</a></li>
+        </ul>
+      </aside>
+
+      <div class="lesson-body">
+
+        <!-- ================= 3.0 ================= -->
+        <section class="block reveal" id="s-intro">
+          <p class="kicker">3.0 <span class="dim">·</span> The setup</p>
+          <h2>The 3 AM mystery</h2>
+          <div class="callout story">
+            <p class="callout-title">Story time</p>
+            <p>It’s 3 AM. A page jolts you awake: the session cache is gone. All of it. The Redis box kept everything in memory — and memory is <strong>fast but volatile</strong>: ~100 nanoseconds per access, and the moment power blinks, it forgets everything you ever told it.</p>
+            <p>Meanwhile the ancient Postgres box, chugging along on spinning disks, didn’t lose a row. Disk is <strong>slow but durable</strong>: ~10 milliseconds per access — roughly <strong>100,000× slower</strong> than RAM — but it remembers.</p>
+          </div>
+          <p>So here’s the mystery: if disk is 100,000× slower than memory, how do databases get away with trusting it? This chapter is the answer. You’re probably not going to <em>write</em> a storage engine, but you will <em>select and tune</em> one — and the difference between engines optimized for <strong>transactional workloads</strong> and those optimized for <strong>analytics</strong> is enormous. Two families dominate:</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Log-structured engines</h4>
+              <p>Only permit appending to files and deleting obsolete files — never update a file in place. We build up to them from the simplest possible database.</p>
+            </div>
+            <div class="term">
+              <h4>Page-oriented engines</h4>
+              <p>Treat the disk as a set of fixed-size pages that can be overwritten. The B-tree is the giant of this family.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= 3.1 ================= -->
+        <section class="block reveal" id="s-structures">
+          <p class="kicker">3.1 <span class="dim">·</span> Two shell functions</p>
+          <h2>The simplest database that works</h2>
+          <p>Chapter 2 looked at data models from the developer’s view; now look from the database’s internal view. Start embarrassingly small — a key-value store in bash:</p>
+          <div class="code-block">#!/bin/bash
+db_set () {
+    echo "$1,$2" &gt;&gt; database
+}
+db_get () {
+    grep "^$1," database | sed -e "s/^$1,//" | tail -n 1
+}</div>
+          <p>Append a <code>key,value</code> line on write; on read, grep for the key, strip the prefix, and take the last match (so the most recent value wins). Watch it work — including the part where updates <em>append</em> rather than overwrite:</p>
+          <div class="code-block">$ db_set 123456 '{"name":"London","attractions":["Big Ben","London Eye"]}'
+$ db_set 42 '{"name":"San Francisco","attractions":["Golden Gate Bridge"]}'
+$ db_get 42
+{"name":"San Francisco","attractions":["Golden Gate Bridge"]}
+$ db_set 42 '{"name":"San Francisco","attractions":["Exploratorium"]}'
+$ db_get 42
+{"name":"San Francisco","attractions":["Exploratorium"]}
+$ cat database
+123456,{"name":"London","attractions":["Big Ben","London Eye"]}
+42,{"name":"San Francisco","attractions":["Golden Gate Bridge"]}
+42,{"name":"San Francisco","attractions":["Exploratorium"]}</div>
+          <p>The performance split is the whole chapter in miniature: <code>db_set</code> is <strong>fast</strong> (appending to a file is very efficient), but <code>db_get</code> is <strong>terrible</strong> — it greps the entire file, so a lookup costs <strong>O(n)</strong>: double the records, double the lookup time. Real databases keep the append-only idea (internally it’s called a <strong>log</strong> — an append-only sequence of records, not necessarily human-readable) and add back the missing machinery: concurrency control, reclaiming disk space, handling errors and partially written records.</p>
+          <div class="callout">
+            <p class="callout-title">The index trade-off — remember this forever</p>
+            <p>An <strong>index</strong> is an additional structure derived from the primary data — a signpost that helps locate it. Well-chosen indexes speed up reads, but <strong>every index slows down writes</strong>, because each write must update every index too. That’s why databases don’t index everything by default: you pick indexes for your query patterns and pay for them at write time. There is no free signpost.</p>
+          </div>
+        </section>
+
+        <!-- ================= 3.2 ================= -->
+        <section class="block reveal" id="s-hash">
+          <p class="kicker">3.2 <span class="dim">·</span> From log to lookup</p>
+          <h2>Hash indexes</h2>
+          <p>Key-value data is the most common shape, and in memory it lives in a hash map. So keep it there: an <strong>in-memory hash map mapping every key to a byte offset in the data file</strong>. On write, append and update the map; on read, seek to the offset and read. Figure 3-1:</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 3-1 (recreated) · A log, indexed by an in-memory hash map</p>
+            <div class="logmap">
+              <div class="hashmap">
+                <div class="storage-title">in-memory hash map</div>
+                <table>
+                  <thead><tr><th>key</th><th>byte offset</th></tr></thead>
+                  <tbody>
+                    <tr><td class="k">moo: 1</td><td class="o">offset 0</td></tr>
+                    <tr><td class="k">moo: 2</td><td class="o">offset 38</td></tr>
+                    <tr><td class="k">moo: 3</td><td class="o">offset 112</td></tr>
+                    <tr><td class="k">milk: 1</td><td class="o">offset 201</td></tr>
+                    <tr><td class="k">milk: 2</td><td class="o">offset 256</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="log">
+                <div class="storage-title">data file (append-only log)</div>
+                <table>
+                  <thead><tr><th>offset</th><th>entry</th></tr></thead>
+                  <tbody>
+                    <tr><td class="off">0</td><td class="dead">moo: 1, "Moo 1"</td></tr>
+                    <tr><td class="off">38</td><td class="dead">moo: 2, "Moo 2"</td></tr>
+                    <tr><td class="off">112</td><td class="new">moo: 3, "Moo 3"</td></tr>
+                    <tr><td class="off">201</td><td class="dead">milk: 1, "Milk 1"</td></tr>
+                    <tr><td class="off">256</td><td class="new">milk: 2, "Milk 2"</td></tr>
+                    <tr><td class="off">311</td><td class="new">moo: 1, "Moo 1 (new)"</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <p class="fig-caption">Struck-through entries are superseded — the log keeps them, the hash map just points at the latest offset per key. Each key maps to the byte offset of its most recent value; one disk seek per read.</p>
+          </div>
+
+          <p>This is essentially <strong>Bitcask</strong>, the default storage engine of <strong>Riak</strong>: high-performance reads and writes, on one condition — <strong>all keys must fit in memory</strong>. The <em>values</em> can exceed memory, loaded from disk in one seek (or none, if that file region is in the OS page cache). It shines when each key’s value is updated frequently — say, key = URL of a cat video, value = play counter — many writes, but not too many distinct keys.</p>
+
+          <h3>Compaction and segment merging</h3>
+          <p>An append-only file eventually eats the disk, so: break the log into <strong>segments</strong> (close a segment at a certain size, start a new one), and run <strong>compaction</strong> — throw away duplicate keys, keeping only the most recent value per key. Compacted segments shrink dramatically, and merging several segments at once is natural. Segments are <strong>never modified after being written</strong> — the merged output goes to new files — so compaction can run in a background thread while reads and writes continue against the old segments; when the merge finishes, reads switch over and the old segments are deleted. Each segment has its own hash map; lookups check the newest first, then older — and merging keeps the number of segments (and hash maps) small.</p>
+
+          <h3>The five practical issues</h3>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">i.</span><div><h4>File format</h4><p>CSV isn’t the best log format. A <strong>binary format</strong> — length of a string in bytes, then the raw string, no escaping needed — is faster and simpler.</p></div></div>
+            <div class="num-card"><span class="n">ii.</span><div><h4>Deleting records</h4><p>Append a special deletion record — a <strong>tombstone</strong> — so the merging process knows to discard previous values for that key.</p></div></div>
+            <div class="num-card"><span class="n">iii.</span><div><h4>Crash recovery</h4><p>Restart loses the in-memory hash maps; replaying whole segments to rebuild them is slow. <strong>Bitcask stores a snapshot of each segment’s hash map on disk</strong> for fast reload.</p></div></div>
+            <div class="num-card"><span class="n">iv.</span><div><h4>Partially written records</h4><p>The DB can crash mid-append. <strong>Bitcask files include checksums</strong> to detect and ignore torn parts of the log.</p></div></div>
+            <div class="num-card"><span class="n">v.</span><div><h4>Concurrency control</h4><p>Writes are appended in a strictly sequential order — the common choice is a <strong>single writer thread</strong>. Segments are immutable, so <strong>many reader threads</strong> can read them concurrently.</p></div></div>
+          </div>
+          <div class="callout warn">
+            <p class="callout-title">Two hard limits</p>
+            <p><strong>1 — the hash table must fit in memory.</strong> A hash map on disk needs lots of random-access I/O, is expensive to grow when full, and hash collisions require fiddly logic. <strong>2 — range queries are dead.</strong> You cannot scan all keys between <code>kitty00000</code> and <code>kitty99999</code> — you’d have to look up each key individually. Fixing these two limits is the next idea’s job.</p>
+          </div>
+        </section>
+
+        <!-- ================= 3.3 ================= -->
+        <section class="block reveal" id="s-sstable">
+          <p class="kicker">3.3 <span class="dim">·</span> Sort the diary</p>
+          <h2>SSTables and LSM-trees</h2>
+          <p>Change one thing about the format: a <strong>Sorted String Table</strong> (SSTable) is a log-structured segment where <strong>key-value pairs are sorted by key</strong>, and each key appears once per merged segment. Three big advantages fall out:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">i.</span><div><h4>Merging is mergesort</h4><p>Read segments side by side, compare first keys, copy the lowest to the output — the classic merge, efficient even when files exceed memory, and the output is sorted too. Duplicate keys across segments? Keep the value from the most recent segment.</p></div></div>
+            <div class="num-card"><span class="n">ii.</span><div><h4>Sparse in-memory index</h4><p>You don’t need every key in memory. Looking for <code>handiwork</code> with offsets known only for <code>handbag</code> and <code>handsome</code>? It must sit between them — jump to <code>handbag</code>’s offset and scan. One index entry per few kilobytes of segment file is enough.</p></div></div>
+            <div class="num-card"><span class="n">iii.</span><div><h4>Block compression</h4><p>Since range reads scan many consecutive records anyway, <strong>group records into blocks and compress them</strong> — each sparse-index entry points at the start of a compressed block. Less disk space <em>and</em> less I/O bandwidth.</p></div></div>
+          </div>
+
+          <h3>Constructing and maintaining SSTables</h3>
+          <p>Writes arrive in any order but segments must be sorted — so sort in memory first. The workflow of an LSM storage engine:</p>
+          <ol>
+            <li>Writes go into an in-memory balanced tree (red-black or AVL), called the <strong>memtable</strong>.</li>
+            <li>When the memtable exceeds a threshold (typically a few megabytes), write it out as an SSTable — cheap, since the tree is already sorted. Meanwhile, new writes go to a fresh memtable.</li>
+            <li>Reads check the memtable, then the most recent on-disk segment, then older ones.</li>
+            <li>Background merging and compaction periodically combine segments and discard overwritten or deleted values.</li>
+          </ol>
+          <p>Crash recovery: writes sitting only in the memtable would be lost, so every write also goes <strong>immediately to a separate log on disk</strong> — unsorted, because its only job is restoring the memtable after a crash; it’s discarded once the memtable is flushed.</p>
+          <div class="callout note">
+            <p class="callout-title">A name worth knowing</p>
+            <p>This algorithm is what <strong>LevelDB</strong> and <strong>RocksDB</strong> implement (LevelDB can back Riak as a Bitcask alternative); similar engines power <strong>Cassandra</strong> and <strong>HBase</strong>, inspired by Google’s <strong>Bigtable</strong> paper — which introduced the terms <em>SSTable</em> and <em>memtable</em>. The original description is Patrick O’Neil et al.’s <strong>Log-Structured Merge-Tree (LSM-tree)</strong>, which gives the whole family its name: <em>LSM storage engines</em>.</p>
+          </div>
+          <p><strong>Lucene</strong> — the indexing engine behind Elasticsearch and Solr — uses the same idea for full-text search’s <strong>term dictionary</strong>: key = word, value = the <strong>postings list</strong> of all document IDs containing it, kept in SSTable-like sorted files merged in the background.</p>
+
+          <h3>Performance optimizations</h3>
+          <ul>
+            <li><strong>Bloom filters:</strong> a read for a nonexistent key would otherwise check the memtable and every segment back to the oldest. A Bloom filter is a memory-efficient set approximation that can say “<strong>definitely not here</strong>” — skipping most of those disk reads.</li>
+            <li><strong>Size-tiered compaction</strong> (HBase): successively merge newer, smaller SSTables into older, larger ones.</li>
+            <li><strong>Leveled compaction</strong> (LevelDB, RocksDB — hence the name): split the key range into smaller SSTables and move older data into separate “levels,” compounding more incrementally and using less disk space. Cassandra supports both.</li>
+          </ul>
+          <p>The summary of what LSM buys: works well even when the dataset is far bigger than memory, <strong>range queries</strong> work (it’s sorted), and writes are <strong>sequential</strong> — remarkably high write throughput.</p>
+        </section>
+
+        <!-- ================= 3.4 ================= -->
+        <section class="block reveal" id="s-btree">
+          <p class="kicker">3.4 <span class="dim">·</span> The library catalog</p>
+          <h2>B-trees</h2>
+          <p>The <strong>most widely used indexing structure</strong> in the world: introduced in <strong>1970</strong>, called “ubiquitous” less than a decade later, still the standard in almost all relational databases and many nonrelational ones. Like SSTables, B-trees keep key-value pairs <strong>sorted</strong> for lookups and range queries — but the philosophy is the opposite.</p>
+          <p>Log-structured indexes break the database into <strong>variable-size segments</strong> written sequentially. B-trees break it into <strong>fixed-size blocks or pages</strong> — traditionally <strong>4 KB</strong> — read or written one page at a time, matching how disks are physically arranged. Each page has an address, so pages can refer to each other like pointers on disk.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 3-6 (recreated) · Looking up key 251 in a B-tree</p>
+            <svg viewBox="0 0 760 360" role="img" aria-label="B-tree lookup: root page has boundaries 100 and 200 and 300; key 251 follows the 200 to 300 branch to a second-level page, then to a leaf page containing key 251" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+              </defs>
+              <!-- root -->
+              <rect x="230" y="16" width="300" height="54" rx="10" fill="#1a2133" stroke="#f0b35c" stroke-width="1.5"/>
+              <text x="380" y="38" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">root page</text>
+              <text x="300" y="58" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="14">&lt;100</text>
+              <text x="380" y="58" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="14" font-weight="700">100–200</text>
+              <text x="460" y="58" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="14">&gt;200</text>
+
+              <!-- internal pages row -->
+              <rect x="70" y="150" width="180" height="54" rx="10" fill="#151c30" stroke="#2b3859"/>
+              <text x="160" y="180" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="11">page for &lt;100</text>
+              <rect x="290" y="150" width="180" height="54" rx="10" fill="#151c30" stroke="#2b3859"/>
+              <text x="380" y="180" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="11">page for 100–200</text>
+              <rect x="510" y="150" width="180" height="54" rx="10" fill="#151c30" stroke="#f0b35c" stroke-width="1.5"/>
+              <text x="600" y="180" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="11">page for 200–300</text>
+
+              <!-- leaf row -->
+              <rect x="60" y="290" width="200" height="54" rx="10" fill="#0f1420" stroke="#1e2740"/>
+              <text x="160" y="320" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="11">leaf: …, 34, 99</text>
+              <rect x="290" y="290" width="200" height="54" rx="10" fill="#0f1420" stroke="#1e2740"/>
+              <text x="390" y="320" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="11">leaf: …, 142, 199</text>
+              <rect x="520" y="290" width="200" height="54" rx="10" fill="#0f1420" stroke="#63dfc2" stroke-width="1.5"/>
+              <text x="620" y="313" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">leaf: …, 251, 299</text>
+              <text x="620" y="332" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10">← value lives here</text>
+
+              <!-- edges: root to internals -->
+              <line x1="310" y1="70" x2="160" y2="150" stroke="#2b3859" stroke-width="1.4"/>
+              <line x1="380" y1="70" x2="380" y2="150" stroke="#2b3859" stroke-width="1.4"/>
+              <line x1="450" y1="70" x2="600" y2="150" stroke="#f0b35c" stroke-width="2" marker-end="url(#arr3)"/>
+              <!-- internals to leaves -->
+              <line x1="160" y1="204" x2="160" y2="290" stroke="#2b3859" stroke-width="1.4"/>
+              <line x1="380" y1="204" x2="390" y2="290" stroke="#2b3859" stroke-width="1.4"/>
+              <line x1="600" y1="204" x2="620" y2="290" stroke="#f0b35c" stroke-width="2" marker-end="url(#arr3)"/>
+              <text x="655" y="252" fill="#f0b35c" font-family="monospace" font-size="11">lookup 251</text>
+              <text x="490" y="122" fill="#f0b35c" font-family="monospace" font-size="11">251 &gt; 200</text>
+            </svg>
+            <p class="fig-caption">Start at the root; each page contains keys and references to child pages, each child responsible for a continuous key range. Key 251 follows the &gt;200 reference, narrows into the 200–300 range, and lands in a leaf page holding the value (inline or by reference). Branching factor here: three; in practice several hundred.</p>
+          </div>
+
+          <h3>How they grow</h3>
+          <p>An update finds the leaf page and rewrites it. An insert that doesn’t fit <strong>splits</strong> the page into two half-full pages and updates the parent to account for the subdivision (Figure 3-7) — which is what keeps the tree <strong>balanced</strong>: a B-tree with <em>n</em> keys always has depth O(log n).</p>
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-value">4 KB</span>
+              <span class="stat-label">Traditional B-tree page size</span>
+              <span class="stat-note">matching the disk’s own fixed-size blocks</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">~500</span>
+              <span class="stat-label">Typical branching factor</span>
+              <span class="stat-note">“several hundred” — limited by page size and key boundaries</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value teal">256 TB</span>
+              <span class="stat-label">Capacity of a 4-level tree</span>
+              <span class="stat-note">4 KB pages × branching factor 500: most databases fit in 3–4 levels</span>
+            </div>
+          </div>
+
+          <h3>Crash safety: the WAL</h3>
+          <p>Here is the B-tree’s Achilles heel: the basic write operation <strong>overwrites a page on disk</strong> — magnetic hard drive: move the head, wait for the platter, overwrite the sector; SSD: erase and rewrite large blocks of the chip. And some operations (a page split) must overwrite <em>several</em> pages at once: the two halves and the parent. Crash after only some of those writes, and you have a corrupted index — say, an <strong>orphan page</strong> that is no child of any parent.</p>
+          <div class="callout note">
+            <p class="callout-title">The write-ahead log (WAL, a.k.a. redo log)</p>
+            <p>Every B-tree modification is first appended to an <strong>append-only write-ahead log</strong>, <em>then</em> applied to the tree’s pages. After a crash, the WAL is replayed to restore the tree to a consistent state. Note the rhyme with the memtable’s recovery log from the LSM side — same trick, opposite engines. Concurrency, meanwhile, needs <strong>latches</strong> (lightweight locks) so threads never see the tree half-modified; log-structured engines get this for free by doing merges in the background and swapping segments atomically.</p>
+          </div>
+
+          <h3>Five real-world optimizations</h3>
+          <ul class="checklist">
+            <li><strong>Copy-on-write B-trees</strong> (e.g. LMDB): write the modified page to a <em>different location</em>, and create a new version of parent pages pointing there — no WAL needed, and handy for concurrency.</li>
+            <li><strong>Key abbreviation:</strong> interior pages only need enough key to act as a range boundary; abbreviating keys packs more per page → higher branching factor → fewer levels.</li>
+            <li><strong>Leaf page ordering:</strong> try to lay out leaves sequentially on disk so range scans don’t seek per page — hard to maintain as the tree grows (LSM merges make it easier).</li>
+            <li><strong>Sibling pointers:</strong> leaves point left and right, so a scan walks the key range without returning to parent pages. (This common variant is the <strong>B+ tree</strong>.)</li>
+            <li><strong>Fractal trees</strong> borrow log-structured ideas to reduce disk seeks (nothing to do with fractals).</li>
+          </ul>
+        </section>
+
+        <!-- ================= 3.5 ================= -->
+        <section class="block reveal" id="s-compare">
+          <p class="kicker">3.5 <span class="dim">·</span> Diary vs. library</p>
+          <h2>Comparing B-trees and LSM-trees</h2>
+          <p>Rule of thumb: <strong>LSM-trees are typically faster for writes; B-trees are thought to be faster for reads</strong> (an LSM read must check several structures and SSTables at various compaction stages — read amplification). Benchmarks are inconclusive and workload-sensitive: test with yours.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th></th><th>LSM-tree</th><th>B-tree</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Write amplification</strong></td><td>Lower: sequential writes of compact SSTables (though repeated compaction rewrites data too)</td><td>Higher: every piece of data written at least twice (WAL + page), plus whole-page rewrites for small changes — some engines write pages twice to survive partial power failure</td></tr>
+                <tr><td><strong>Write throughput</strong></td><td>Higher, especially on magnetic disks (sequential ≫ random)</td><td>Lower</td></tr>
+                <tr><td><strong>Storage overhead</strong></td><td>Lower — compaction rewrites SSTables to remove fragmentation (leveled compaction especially)</td><td>Fragmentation: split or oversized pages leave unused space</td></tr>
+                <tr><td><strong>Read performance</strong></td><td>Slower — must check memtable + all segments</td><td>Faster and more predictable at higher percentiles</td></tr>
+                <tr><td><strong>Key location</strong></td><td>Multiple copies of the same key in different segments</td><td>Each key exists in exactly one place — locks on ranges of keys attach directly to the tree, which transactional isolation (Ch. 7) relies on</td></tr>
+                <tr><td><strong>Compaction risk</strong></td><td>Competes with writes for disk bandwidth; if it can’t keep up, segments accumulate until the disk fills and reads slow — SSTable engines typically don’t throttle writes, so you need explicit monitoring</td><td>—</td></tr>
+                <tr><td><strong>SSD reality</strong></td><td>SSD firmware internally turns random writes into sequential ones, blurring the advantage — but compactness still buys more requests per I/O bandwidth</td><td>—</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><strong>Write amplification</strong> deserves the definition: one write to the database becoming <em>multiple</em> writes to disk over its lifetime — a particular concern on SSDs, which can only overwrite blocks a limited number of times before wearing out.</p>
+          <p>Verdict: B-trees are deeply ingrained and consistently good for many workloads; log-structured indexes are increasingly popular in new datastores. No quick and easy rule — test empirically.</p>
+        </section>
+
+        <!-- ================= 3.6 ================= -->
+        <section class="block reveal" id="s-other">
+          <p class="kicker">3.6 <span class="dim">·</span> Beyond the two giants</p>
+          <h2>Other indexing structures</h2>
+
+          <h3>Secondary indexes, heap files, clustered and covering indexes</h3>
+          <p>Everything so far indexed the <strong>primary key</strong> (one row, one document, one vertex). <strong>Secondary indexes</strong> — <code>CREATE INDEX</code> — are crucial for joins; they’re easy to build from a key-value index once you handle keys that <em>aren’t unique</em>: make each value a list of matching row identifiers (like a postings list), or append the row identifier to make each key unique. Both B-trees and LSM-trees work as secondary indexes.</p>
+          <p>Then: does the index store the row, or a reference to it? The reference approach keeps rows in a <strong>heap file</strong> — unordered storage that avoids duplicating data across multiple secondary indexes. In-place update works if the new value fits; otherwise the row moves and all indexes update, or a <strong>forwarding pointer</strong> is left behind. At the other extreme, a <strong>clustered index</strong> stores the row <em>within</em> the index: MySQL InnoDB’s primary key is always clustered (secondary indexes there refer to the primary key), and SQL Server allows one clustered index per table. In between sits the <strong>covering index</strong> (“index with included columns”) — some of a table’s columns stored in the index, so some queries are answered by the index alone: it <em>covers</em> them. Trade-offs: faster reads, more storage, more write overhead.</p>
+
+          <h3>Multi-dimensional indexes</h3>
+          <p>A restaurant finder needs all restaurants within the map rectangle the user is viewing — a <strong>two-dimensional range query</strong>:</p>
+          <div class="code-block"><span class="kw">SELECT</span> * <span class="kw">FROM</span> restaurants
+<span class="kw">WHERE</span> latitude  &gt;  51.4946 <span class="kw">AND</span> latitude  &lt;  51.5079
+  <span class="kw">AND</span> longitude &gt; -0.1162  <span class="kw">AND</span> longitude &lt; -0.1004;</div>
+          <p>A standard B-tree or LSM index can’t answer it: it can give all restaurants in a latitude range <em>at any longitude</em>, or in a longitude range <em>anywhere pole-to-pole</em> — not both at once. The fixes: a <strong>space-filling curve</strong> translating 2-D positions into one number (then a regular B-tree), or specialized <strong>R-trees</strong> — PostGIS implements geospatial indexes as R-trees on PostgreSQL’s Generalized Search Tree. And it’s not just maps: e-commerce (an RGB color range: a three-dimensional index) or weather observations (all 2013 temperatures between 25 and 30 °C: a two-dimensional index on (date, temperature) narrows both simultaneously, where a one-dimensional index would force scanning all of one dimension).</p>
+
+          <h3>Full-text search and fuzzy indexes</h3>
+          <p>All the indexes so far assume exact keys. Full-text search expands a word to <strong>synonyms</strong>, ignores <strong>grammatical variation</strong>, finds words <strong>near each other</strong> in a document — and <strong>Lucene</strong> can search for words within a given <strong>edit distance</strong> (edit distance 1 = one letter added, removed, or replaced). Internally: LevelDB’s in-memory index is a sparse collection of keys; Lucene’s is a finite-state automaton over the characters — like a <strong>trie</strong> — transformable into a <strong>Levenshtein automaton</strong> that efficiently matches within an edit distance.</p>
+
+          <h3>Keeping everything in memory</h3>
+          <p>All of this is a response to disk’s awkwardness. Disk keeps two advantages — <strong>durability</strong> and <strong>lower cost per gigabyte</strong> — but RAM keeps getting cheaper and many datasets aren’t that big. Hence <strong>in-memory databases</strong>: <strong>Memcached</strong> for cache-only use; <strong>VoltDB, MemSQL, Oracle TimesTen</strong> (relational, durable via log/snapshot/replication); <strong>RAMCloud</strong> (log-structured, in memory and on disk); <strong>Redis and Couchbase</strong> (weak durability via asynchronous disk writes).</p>
+          <div class="callout warn">
+            <p class="callout-title">The counterintuitive part</p>
+            <p>The performance advantage of in-memory databases is <strong>not</strong> about avoiding disk reads. A disk-based engine with enough memory never reads from disk either — the OS caches recently used blocks. The real win: <strong>avoiding the overhead of encoding in-memory data structures into a form that can be written to disk</strong>. Plus data models disks can’t do well — Redis exposes priority queues and sets because keeping everything in memory makes the implementation simple.</p>
+          </div>
+          <p>Research on <strong>anti-caching</strong> extends the architecture to datasets larger than memory — evict least-recently-used records to disk, reload on access (like OS swap, but at record granularity rather than whole pages), with indexes still fully in memory (the Bitcask constraint). And watch <strong>non-volatile memory (NVM)</strong>: it may force yet another rethink of storage engine design.</p>
+        </section>
+
+        <!-- ================= 3.7 ================= -->
+        <section class="block reveal" id="s-oltp">
+          <p class="kicker">3.7 <span class="dim">·</span> Two very different jobs</p>
+          <h2>Transaction processing or analytics?</h2>
+          <p>Early databases served commerce, so a “transaction” was literally making a sale. The word stuck as databases grew beyond money: a <strong>group of reads and writes forming a logical unit</strong> (not necessarily ACID — that’s Chapter 7). Two access patterns emerged:</p>
+          <p><strong>OLTP</strong> (online transaction processing): interactive applications look up a <strong>small number of records by key</strong> via an index, inserting and updating from user input. <strong>OLAP</strong> (online analytic processing): analytic queries <strong>scan huge numbers of records</strong>, read a few columns, and compute aggregates — “What was each store’s January revenue?”, “How many extra bananas did the promotion sell?”, “Which baby food is bought together with brand X diapers?” — written by business analysts feeding <strong>business intelligence</strong> reports.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Property</th><th>Transaction processing (OLTP)</th><th>Analytic systems (OLAP)</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Main read pattern</strong></td><td>Small number of records per query, fetched by key</td><td>Aggregate over large number of records</td></tr>
+                <tr><td><strong>Main write pattern</strong></td><td>Random-access, low-latency writes from user input</td><td>Bulk import (ETL) or event stream</td></tr>
+                <tr><td><strong>Primarily used by</strong></td><td>End user/customer, via web application</td><td>Internal analyst, for decision support</td></tr>
+                <tr><td><strong>What data represents</strong></td><td>Latest state of data (current point in time)</td><td>History of events that happened over time</td></tr>
+                <tr><td><strong>Dataset size</strong></td><td>Gigabytes to terabytes</td><td>Terabytes to petabytes</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Data warehousing</h3>
+          <p>At first the same database did both — SQL was flexible enough. Then, in the late 1980s / early 1990s, came the shift: <strong>stop running analytics on OLTP systems</strong>. The reasoning: an enterprise has dozens of transaction systems (website, point-of-sale, inventory, supplier management…), each highly available and latency-critical; DBAs rightly refused to let analysts run ad hoc queries that scan large parts of the dataset and damage concurrent transactions. So build a <strong>data warehouse</strong>: a separate, read-only database that analysts can query to their hearts’ content — fed by <strong>ETL</strong> (extract–transform–load) from all the OLTP systems: periodic dumps or continuous update streams, transformed into an analysis-friendly schema, cleaned up, loaded.</p>
+          <p>Warehouses exist in almost all large enterprises and are almost unheard of in small companies — small companies have less data and fewer OLTP systems; a conventional SQL database or even a spreadsheet suffices. What the big guys get for their trouble: a database <strong>optimized for analytic access patterns</strong>, where the internals look completely different from OLTP despite both speaking SQL.</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Commercial warehouses</h4>
+              <p>Teradata, Vertica, SAP HANA, ParAccel — and Amazon Redshift, a hosted version of ParAccel.</p>
+            </div>
+            <div class="term">
+              <h4>SQL-on-Hadoop</h4>
+              <p>Apache Hive, Spark SQL, Cloudera Impala, Facebook Presto, Apache Tajo, Apache Drill — young but competing with the commercial systems; some based on Google’s Dremel.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= 3.8 ================= -->
+        <section class="block reveal" id="s-star">
+          <p class="kicker">3.8 <span class="dim">·</span> The formula for facts</p>
+          <h2>Stars and snowflakes</h2>
+          <p>Analytics doesn’t have data-model diversity — most warehouses use one formulaic style, the <strong>star schema</strong> (a.k.a. dimensional modeling): a central <strong>fact table</strong> where each row is an <strong>event</strong> — a purchase, a click, a page view — with columns for attributes (sale price, supplier cost for margin math) and foreign keys into <strong>dimension tables</strong> representing the who/what/where/when/how/why: <code>dim_product</code> (SKU, description, brand, category, fat content, package size), <code>dim_store</code> (services offered, square footage, opening date, distance from the highway…), even date as a dimension so holidays are queryable. Capture events individually for maximum analytical flexibility, and the fact table becomes <strong>extremely large</strong> — Apple, Walmart, or eBay may hold <strong>tens of petabytes</strong> of transaction history, most of it fact tables.</p>
+          <p>Why “star”? The fact table sits in the middle with dimensions around it — the connections look like the rays of a star. The <strong>snowflake schema</strong> is the variation where dimensions break into subdimensions (separate brand and category tables, referenced by foreign key): more <strong>normalized</strong>, but star schemas are usually preferred for being simpler for analysts. Either way, tables run wide: fact tables often exceed <strong>100 columns</strong>, sometimes several hundred.</p>
+        </section>
+
+        <!-- ================= 3.9 ================= -->
+        <section class="block reveal" id="s-column">
+          <p class="kicker">3.9 <span class="dim">·</span> Flip it sideways</p>
+          <h2>Column-oriented storage</h2>
+          <p>Fact tables have 100+ columns; a typical warehouse query touches <strong>4 or 5</strong> of them (<code>SELECT *</code> is rare in analytics). But OLTP storage is <strong>row-oriented</strong> — all values of one row adjacent, as in document stores. Example 3-1, a representative query:</p>
+          <div class="code-block"><span class="kw">SELECT</span>
+  dim_date.weekday, dim_product.category,
+  <span class="kw">SUM</span>(fact_sales.quantity) <span class="kw">AS</span> quantity_sold
+<span class="kw">FROM</span> fact_sales
+  <span class="kw">JOIN</span> dim_date    <span class="kw">ON</span> fact_sales.date_key   = dim_date.date_key
+  <span class="kw">JOIN</span> dim_product <span class="kw">ON</span> fact_sales.product_sk = dim_product.product_sk
+<span class="kw">WHERE</span>
+  dim_date.year = 2013 <span class="kw">AND</span>
+  dim_product.category <span class="kw">IN</span> ('Fresh fruit', 'Candy')
+<span class="kw">GROUP BY</span>
+  dim_date.weekday, dim_product.category;</div>
+          <p>Every fruit-or-candy purchase in 2013 — a huge number of rows — but only <strong>three columns of fact_sales</strong>: <code>date_key</code>, <code>product_sk</code>, <code>quantity</code>. Row storage must still load each 100+ column row from disk, parse it, and discard most of it. The fix: <strong>store all values from each column together</strong>.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 3-10 (recreated) · By row vs. by column</p>
+            <div class="storage-grid">
+              <div class="storage-panel">
+                <div class="storage-title">row-oriented</div>
+                <table>
+                  <thead><tr><th>date_key</th><th>product_sk</th><th>store_sk</th><th>promo_sk</th><th>quantity</th><th>net_price</th></tr></thead>
+                  <tbody>
+                    <tr><td class="hl">140</td><td class="hl">69</td><td>4</td><td>19</td><td class="hl">1</td><td>13.9</td></tr>
+                    <tr><td class="hl">140</td><td class="hl">69</td><td>5</td><td>19</td><td class="hl">3</td><td>14.0</td></tr>
+                    <tr><td class="hl">140</td><td class="hl">69</td><td>5</td><td>20</td><td class="hl">1</td><td>14.0</td></tr>
+                    <tr><td class="hl">143</td><td class="hl">69</td><td>4</td><td>21</td><td class="hl">2</td><td>14.5</td></tr>
+                    <tr><td class="hl">143</td><td class="hl">69</td><td>2</td><td>—</td><td class="hl">1</td><td>13.9</td></tr>
+                  </tbody>
+                </table>
+                <p class="fig-caption" style="margin:0;padding:10px 14px">Reading 3 columns = reading (and parsing) every full row.</p>
+              </div>
+              <div class="storage-panel">
+                <div class="storage-title">column-oriented</div>
+                <table>
+                  <thead><tr><th>date_key file</th><th>product_sk file</th><th>quantity file</th></tr></thead>
+                  <tbody>
+                    <tr><td class="hl2">140</td><td class="hl2">69</td><td class="hl2">1</td></tr>
+                    <tr><td class="hl2">140</td><td class="hl2">69</td><td class="hl2">3</td></tr>
+                    <tr><td class="hl2">140</td><td class="hl2">69</td><td class="hl2">1</td></tr>
+                    <tr><td class="hl2">143</td><td class="hl2">69</td><td class="hl2">2</td></tr>
+                    <tr><td class="hl2">143</td><td class="hl2">69</td><td class="hl2">1</td></tr>
+                  </tbody>
+                </table>
+                <p class="fig-caption" style="margin:0;padding:10px 14px">Only the three needed column files are read — the other 100+ never leave disk.</p>
+              </div>
+            </div>
+            <p class="fig-caption">Each column file keeps rows in the same order — row 23 is the 23rd entry of <em>every</em> column file, which is how you reassemble a whole row. Parquet, the columnar format for document data models, descends from Google’s Dremel.</p>
+          </div>
+
+          <h3>Column compression</h3>
+          <p>Columns are repetitive, which compresses beautifully. A retailer may have <strong>billions of sales but only 100,000 distinct products</strong>: take a column with <em>n</em> distinct values and turn it into <em>n separate bitmaps</em> — one per value, one bit per row (1 = the row has that value). Small <em>n</em> (a country column: ~200 values) means one bit per row, already tiny; bigger <em>n</em> makes sparse bitmaps, which <strong>run-length encode</strong> down to remarkably little.</p>
+          <div class="callout">
+            <p class="callout-title">Bitmaps compute your WHERE clause</p>
+            <p><code>WHERE product_sk IN (30, 68, 69)</code> → load three bitmaps and <strong>bitwise OR</strong> them. <code>WHERE product_sk = 31 AND store_sk = 3</code> → load two bitmaps and <strong>bitwise AND</strong> — valid because columns share row order, so the <em>k</em>th bit of one column’s bitmap is the same row as the <em>k</em>th bit of another’s.</p>
+          </div>
+
+          <h3>CPU, sort order, and writes</h3>
+          <p>Beyond disk bandwidth, column layouts make <strong>CPU cycles</strong> go further — <strong>vectorized processing</strong>: compressed column chunks fit in the CPU’s <strong>L1 cache</strong> and iterate in a tight loop, no function calls, with bitwise operators working directly on compressed data (also avoiding branch mispredictions; using SIMD instructions). Since rows must stay in the same order across columns, you sort <strong>entire rows at a time</strong> by chosen sort keys — <code>date_key</code> first means last-month queries scan only that range, and the first sort column compresses hardest (long runs of the same value → run-length encoding to a few KB even over billions of rows). C-Store/Vertica’s extension: store the data <strong>replicated in several sort orders</strong> at once — like multiple secondary indexes, but without pointers, since column stores hold values only. One more thing Cassandra/HBase readers trip on: their <strong>column families</strong> (inherited from Bigtable) are <em>not</em> column orientation — all columns of a row are stored together, row key attached, no column compression; mostly row-oriented.</p>
+          <p>Writes are the cost: update-in-place is impossible in compressed, sorted columns (inserting mid-table rewrites every column file). So use the LSM move — writes go to an in-memory store, and bulk-merge into column files later. Queries check both; the optimizer hides the split. That is essentially what <strong>Vertica</strong> does.</p>
+
+          <h3>Materialized views and data cubes</h3>
+          <p>Warehouse queries aggregate constantly — COUNT, SUM, AVG, MIN, MAX. A <strong>materialized view</strong> is a table-like object whose contents are the <em>results of a query, written to disk</em> (unlike a virtual view, which is just a query shortcut expanded on the fly). It’s a denormalized copy that must be updated when underlying data changes — expensive writes, which is why OLTP rarely uses them and read-heavy warehouses might. The special case: a <strong>data cube (OLAP cube)</strong> — a grid of aggregates grouped by dimensions; with two dimensions (date × product), each cell holds the SUM of facts for that combination, and row/column totals give one-dimension summaries. Precomputed answers — “total sales per store yesterday” is a lookup, not a scan of millions. The catch: cubes lack the raw data’s flexibility — if price isn’t a dimension, you can’t ask what share of sales came from items over $100 — so warehouses keep the raw data and use cubes as a speed boost.</p>
+        </section>
+
+        <!-- ================= 3.10 ================= -->
+        <section class="block reveal" id="s-summary">
+          <p class="kicker">3.10 <span class="dim">·</span> Pulling it together</p>
+          <h2>Summary</h2>
+          <div class="callout note">
+            <p class="callout-title">The chapter in one card</p>
+            <p>Storage engines split by workload. <strong>OLTP</strong>: user-facing, huge request volume, few records per query, index-driven — <em>disk seek time</em> is the bottleneck. <strong>Analytics/warehouse</strong>: fewer but brutally demanding queries over millions of rows — <em>disk bandwidth</em> is the bottleneck, and <strong>column-oriented storage</strong> is the rising answer. On the OLTP side, two schools: the <strong>log-structured school</strong> (Bitcask, SSTables, LSM-trees, LevelDB, Cassandra, HBase, Lucene) systematically turns random writes into sequential ones; the <strong>update-in-place school</strong> (B-trees, in all major relational databases) overwrites fixed-size pages, giving each key exactly one home. Knowing these internals won’t make you an expert tuner of any one engine, but it gives you the vocabulary to read its documentation and reason about what the knobs do.</p>
+          </div>
+
+          <h3>Glossary</h3>
+          <dl class="kv">
+            <div class="kv-row"><dt>log</dt><dd>An append-only sequence of records — in the general sense, not application logs; may be binary.</dd></div>
+            <div class="kv-row"><dt>index</dt><dd>A structure derived from primary data that acts as a signpost; speeds reads, slows writes — the storage trade-off.</dd></div>
+            <div class="kv-row"><dt>Bitcask</dt><dd>Riak’s default engine: in-memory hash map of every key → byte offset in an append-only file; all keys must fit in memory.</dd></div>
+            <div class="kv-row"><dt>segment / compaction</dt><dd>A closed chunk of the log; compaction discards duplicate keys, keeping the most recent value per key.</dd></div>
+            <div class="kv-row"><dt>tombstone</dt><dd>A deletion record appended to the log, telling the merger to drop previous values for that key.</dd></div>
+            <div class="kv-row"><dt>SSTable</dt><dd>Sorted String Table — a segment where key-value pairs are sorted by key and each key appears once.</dd></div>
+            <div class="kv-row"><dt>memtable</dt><dd>The in-memory sorted tree that receives writes before flushing them out as an SSTable; restored from a log after a crash.</dd></div>
+            <div class="kv-row"><dt>LSM-tree</dt><dd>Log-Structured Merge-Tree: a cascade of SSTables merged in the background (O’Neil et al.); LevelDB, RocksDB, Cassandra, HBase, Bigtable lineage.</dd></div>
+            <div class="kv-row"><dt>size-tiered vs. leveled compaction</dt><dd>Merge smaller SSTables into bigger ones vs. split key ranges into incremental “levels” (LevelDB/RocksDB, hence the names).</dd></div>
+            <div class="kv-row"><dt>B-tree</dt><dd>The ubiquitous page-oriented index: fixed-size pages (traditionally 4 KB), balanced by page splits, depth O(log n).</dd></div>
+            <div class="kv-row"><dt>branching factor</dt><dd>The number of child-page references in one B-tree page — several hundred in practice.</dd></div>
+            <div class="kv-row"><dt>WAL / redo log</dt><dd>Write-ahead log: every B-tree modification appended there before touching the pages; replayed after a crash.</dd></div>
+            <div class="kv-row"><dt>latches</dt><dd>Lightweight locks protecting B-tree structures for concurrent access.</dd></div>
+            <div class="kv-row"><dt>write amplification</dt><dd>One database write becoming multiple disk writes over its lifetime (WAL + page + splits; or repeated compaction) — a wear concern on SSDs.</dd></div>
+            <div class="kv-row"><dt>heap file</dt><dd>Unordered row storage that indexes point into, avoiding data duplication across secondary indexes.</dd></div>
+            <div class="kv-row"><dt>clustered index</dt><dd>Stores the row within the index (InnoDB primary keys, SQL Server’s one-per-table allowance).</dd></div>
+            <div class="kv-row"><dt>covering index</dt><dd>Stores some columns in the index so some queries never leave it — it “covers” them.</dd></div>
+            <div class="kv-row"><dt>concatenated index</dt><dd>Multi-column index combining fields into one key — like a phone book sorted (lastname, firstname).</dd></div>
+            <div class="kv-row"><dt>R-tree / space-filling curve</dt><dd>Multi-dimensional (e.g. geospatial) indexing; PostGIS uses R-trees, curves flatten 2-D to a sortable number.</dd></div>
+            <div class="kv-row"><dt>Levenshtein automaton</dt><dd>Lucene’s fuzzy-search structure: match words within a given edit distance.</dd></div>
+            <div class="kv-row"><dt>anti-caching</dt><dd>Evict least-recently-used records from memory to disk, reload on access — OS swap at record granularity.</dd></div>
+            <div class="kv-row"><dt>OLTP / OLAP</dt><dd>Small indexed reads/writes for interactive apps vs. aggregate scans over huge history for analysts.</dd></div>
+            <div class="kv-row"><dt>data warehouse / ETL</dt><dd>A separate read-only analytic copy of an organization’s OLTP data, fed by extract–transform–load.</dd></div>
+            <div class="kv-row"><dt>star / snowflake schema</dt><dd>Fact table (events) surrounded by dimension tables (who/what/where/when); snowflake further normalizes dimensions.</dd></div>
+            <div class="kv-row"><dt>column-oriented storage</dt><dd>All values of each column stored together; query reads only needed column files (Parquet descends from Dremel).</dd></div>
+            <div class="kv-row"><dt>bitmap index / run-length encoding</dt><dd>One bitmap per distinct value, one bit per row; AND/OR bitmaps evaluate WHERE clauses; RLE compresses sparse runs.</dd></div>
+            <div class="kv-row"><dt>vectorized processing</dt><dd>Tight loops over compressed column chunks that fit in L1 cache — also SIMD-friendly.</dd></div>
+            <div class="kv-row"><dt>materialized view / data cube</dt><dd>Query results written to disk; a cube is the dimension-grid special case — precomputed aggregates as a speed boost.</dd></div>
+          </dl>
+
+          <h3>Further reading</h3>
+          <ul class="reading-list">
+            <li><strong>Bayer &amp; McCreight, “Organization and Maintenance of Large Ordered Indices”</strong><span class="src">Acta Informatica, 1970 — the original B-tree paper</span></li>
+            <li><strong>Patrick O’Neil et al., “The Log-Structured Merge-Tree (LSM-Tree)”</strong><span class="src">Acta Informatica, 1996 — the LSM-tree’s founding paper</span></li>
+            <li><strong>Chang et al., “Bigtable: A Distributed Storage System for Structured Data”</strong><span class="src">USENIX OSDI, 2006 — introduced SSTables and memtables</span></li>
+            <li><strong>Burton Bloom, “Space/Time Trade-offs in Hash Coding with Allowable Errors”</strong><span class="src">Communications of the ACM, 1970 — the Bloom filter</span></li>
+            <li><strong>Stonebraker et al., “C-Store: A Column-oriented DBMS”</strong><span class="src">VLDB, 2005 — multiple sort orders, the ancestor of Vertica</span></li>
+            <li><strong>Melnik et al., “Dremel: Interactive Analysis of Web-Scale Datasets”</strong><span class="src">VLDB, 2010 — columnar record assembly, ancestor of Parquet</span></li>
+          </ul>
+        </section>
+
+        <!-- ================= quiz ================= -->
+        <section class="quiz-wrap" id="quiz-section">
+          <div class="quiz-head">
+            <div>
+              <p class="kicker">Check yourself <span class="dim">· 13 questions</span></p>
+              <h2>Chapter 3 quiz</h2>
+              <p>Two written, eleven multiple-choice — from bash to bitmaps.</p>
+            </div>
+            <span class="chip" id="quiz-last">no score yet</span>
+          </div>
+          <div id="quiz"></div>
+          <button class="mark-complete" id="mark-complete" type="button">Mark chapter complete</button>
+        </section>
+
+        <nav class="lesson-pager">
+          <a class="pager-link" href="chapter2.html">
+            <span class="dir">← Previous</span>
+            <span class="title">Data Models and Query Languages</span>
+          </a>
+          <a class="pager-link next" href="chapter4.html">
+            <span class="dir">Next chapter →</span>
+            <span class="title">Encoding and Evolution</span>
+          </a>
+        </nav>
+
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container foot-inner">
+      <p>DDIA practice companion · a fan-made study aid for<br>“Designing Data-Intensive Applications” by Martin Kleppmann (O’Reilly)</p>
+      <p>static site · no trackers · progress in localStorage</p>
+    </div>
+  </footer>
+
+  <script>
+    window.QUIZ = {
+      lesson: 'chapter3',
+      questions: [
+        {
+          q: 'You’re at 95% disk in Cassandra. “There’s only 20 GB of live data,” someone says — and deleting data makes it worse. Explain what’s happening, then reveal.',
+          short: true,
+          answer: 'Deletes in an LSM store are tombstones — new writes that mark data dead. Disk space is only freed when compaction merges the levels containing those tombstones and drops the dead entries, so deleting under pressure temporarily adds to the log — and if compaction can’t keep up, segments accumulate and reads slow too.'
+        },
+        {
+          q: 'Why does a four-level B-tree suffice for almost any database? Show the arithmetic, then reveal.',
+          short: true,
+          answer: 'Pages are 4 KB with a branching factor of ~500: level 1 holds the root; 500 children; 250,000; 125M; and the fourth level holds 62.5 billion pages × 4 KB = 256 TB. Most databases fit comfortably inside that, in 3–4 page reads per lookup.'
+        },
+        {
+          q: 'Why is db_get in the bash database so slow?',
+          options: [
+            'The shell forks a process per query',
+            'It greps the entire file on every lookup — O(n): doubling the records doubles the lookup time',
+            'Text parsing is slower than binary',
+            'tail -n 1 flushes the disk cache'
+          ],
+          answer: 1,
+          why: 'db_get scans the whole file with grep, so cost grows linearly with the number of records — O(n). Everything in the rest of the chapter is about fixing that: indexes trade write-time maintenance for read-time lookups.'
+        },
+        {
+          q: 'The Bitcask engine keeps every key’s hash map in memory — what does that rule out?',
+          options: [
+            'Large values',
+            'Frequent updates to the same key',
+            'More distinct keys than fit in memory (and it also can’t do range queries — you’d have to look up each key individually)',
+            'Multiple reader threads'
+          ],
+          answer: 2,
+          why: 'Two hard limits: the in-memory hash table must fit in RAM (on-disk hash maps need random I/O and are painful to grow), and range scans are dead because the hash map has no ordering.'
+        },
+        {
+          q: 'In an SSTable, the in-memory index has offsets for handbag and handsome but you want handiwork. What happens?',
+          options: [
+            'The read fails and the full key list is loaded',
+            'handiwork must be between them — jump to handbag’s offset and scan from there; a few kilobytes of scan is cheap, so the index can be sparse',
+            'A second lookup checks the memtable for the missing key',
+            'The segment is re-sorted'
+          ],
+          answer: 1,
+          why: 'Sorted order makes a sparse index sufficient: any key must lie between its two indexed neighbors, and scanning a few KB from the lower boundary is fast. One index entry per few kilobytes of segment file suffices.'
+        },
+        {
+          q: 'What is the write-ahead log’s job in a B-tree?',
+          options: [
+            'To make writes sequential and fast, like the LSM log',
+            'To record every modification before it touches the tree’s pages, so a crash can be repaired by replaying the log — otherwise a half-finished page split leaves a corrupted index',
+            'To deduplicate keys across pages',
+            'To cache recently read leaf pages'
+          ],
+          answer: 1,
+          why: 'B-trees overwrite pages in place, and some operations (splits) touch several pages at once. Crash mid-way = corruption (e.g. an orphan page). The WAL records each modification first and replays to consistency after a crash.'
+        },
+        {
+          q: '“One write to the database becomes multiple writes to disk over its lifetime” — what is this called, and which engine suffers more of it?',
+          options: [
+            'Segment merging; LSM-trees suffer more',
+            'Write amplification; B-trees suffer more — every datum is written at least twice (WAL + page), plus whole-page rewrites for small changes',
+            'Read amplification; B-trees suffer more',
+            'Compaction debt; Cassandra suffers most by definition'
+          ],
+          answer: 1,
+          why: 'Write amplification — B-trees pay WAL + page (and sometimes pages twice for power-failure safety), while LSM-trees sequentially write compact SSTables. That’s the big reason LSM writes are faster, and it matters on SSDs with limited overwrite lifetimes.'
+        },
+        {
+          q: 'Clustered index vs. covering index — what’s the difference?',
+          options: [
+            'No difference — two names for storing rows inside the index',
+            'A clustered index stores the whole row within the index; a covering index stores only some columns — enough that certain queries never leave the index',
+            'A clustered index is always primary; a covering index is always secondary and complete',
+            'A covering index includes the WAL; a clustered index does not'
+          ],
+          answer: 1,
+          why: 'Clustered = the full row lives in the index (InnoDB primary keys). Covering = “index with included columns”, a compromise: enough columns stored that the index alone can answer some queries — it “covers” them.'
+        },
+        {
+          q: 'How does a column store evaluate WHERE product_sk = 31 AND store_sk = 3 with bitmaps?',
+          options: [
+            'It converts the bitmaps to rows first, then filters',
+            'Load the two bitmaps and bitwise AND them — valid because all columns keep rows in the same order, so the kth bit of each bitmap is the same row',
+            'It ORs the bitmaps, then subtracts the WHERE clause',
+            'Bitmaps only work for IN clauses, not equality'
+          ],
+          answer: 1,
+          why: 'Bitwise AND across the two bitmaps — the kth bit of every column’s bitmap refers to the same row, so the AND leaves bits only where both conditions hold. IN (30, 68, 69) likewise ORs three bitmaps. Very fast.'
+        },
+        {
+          q: 'Why do companies build separate data warehouses instead of letting analysts query OLTP databases?',
+          options: [
+            'OLTP databases can’t run SQL aggregates',
+            'Analytic queries scan huge parts of the dataset and damage the performance of concurrent latency-critical transactions — the warehouse is a read-only copy optimized for analytic access patterns instead',
+            'Because OLTP data is too valuable to look at',
+            'Because warehouses are cheaper to license'
+          ],
+          answer: 1,
+          why: 'OLTP systems must stay highly available with low latency; ad hoc full-scan analytics threatens that. The warehouse holds a read-only, ETL-fed, analysis-optimized copy — same SQL interface, completely different internals.'
+        },
+        {
+          q: 'A fact table row represents what, and why capture them individually?',
+          options: [
+            'A product; to keep the dimension tables small',
+            'An event that occurred at a particular time — maximum flexibility for analysis later, at the price of an extremely large fact table (tens of petabytes at Apple/Walmart/eBay scale)',
+            'A daily aggregate; to make queries faster',
+            'A customer; to normalize dimensions'
+          ],
+          answer: 1,
+          why: 'Fact rows are events — purchases, clicks, page views — each individually captured so any later question is answerable. The cost: fact tables dwarf everything else, which is exactly why column stores exist.'
+        },
+        {
+          q: 'What is the counterintuitive reason in-memory databases are fast?',
+          options: [
+            'They avoid disk reads — but so does a disk-based engine with enough memory, since the OS caches blocks anyway',
+            'They avoid the overheads of encoding in-memory data structures into a disk-writable form — that encoding, not disk reads, is the real tax',
+            'RAM is more reliable than disk',
+            'They skip query parsing entirely'
+          ],
+          answer: 1,
+          why: 'A disk-based engine with enough memory never reads from disk either — the OS page cache does that for free. The in-memory win is not paying to translate between in-memory structures and disk formats, plus data models (Redis queues, sets) that disk-centric indexes can’t easily offer.'
+        },
+        {
+          q: 'Cassandra/HBase “column families” — are they column-oriented storage?',
+          options: [
+            'Yes — that’s where the column-store idea came from',
+            'No — within a column family, all columns of a row are stored together with a row key, and there is no column compression; the Bigtable model is mostly row-oriented',
+            'Only when using leveled compaction',
+            'Only in Cassandra, not HBase'
+          ],
+          answer: 1,
+          why: '“Column family” is misleadingly named: each family stores whole rows together and doesn’t compress columns — the opposite of the warehouse-style column store, which puts each column’s values in separate files.'
+        }
+      ]
+    };
+  </script>
+  <script src="../js/shared.js"></script>
+  <script src="../js/quiz.js"></script>
+  <script src="../js/toc.js"></script>
+</body>
+</html>

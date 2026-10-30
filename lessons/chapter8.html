@@ -1,0 +1,896 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chapter 8 · The Trouble with Distributed Systems — DDIA Practice</title>
+  <meta name="description" content="A comprehensive study guide to Chapter 8 of Designing Data-Intensive Applications: partial failure, unreliable networks and timeouts, clock skew and LWW data loss, TrueTime confidence intervals, process pauses and GC, leases, fencing tokens, Byzantine faults, and system models.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d14'/%3E%3Cpath d='M16 6l9 10-9 10-9-10z' fill='%23f0b35c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Spline+Sans:wght@300..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
+  
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-active="lessons" class="is-lesson">
+
+  <div class="reading-progress" id="readingProgress" aria-hidden="true"></div>
+
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="../index.html">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <rect x="1" y="2" width="16" height="4" rx="1.5" stroke="#f0b35c" stroke-width="1.6"/>
+          <rect x="1" y="7" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+          <rect x="1" y="12" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+        </svg>
+        DDIA&nbsp;<span class="dim">/ practice</span>
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="../index.html" data-nav="home">Home</a>
+        <a href="../index.html#lessons" data-nav="lessons">Lessons</a>
+        <a href="../flashcards.html" data-nav="flashcards">Flashcards</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+
+    <div class="lesson-hero">
+      <span class="lesson-hero-num" aria-hidden="true">8</span>
+      <div class="container">
+        <a class="crumb" href="../index.html#lessons">← All chapters</a>
+        <p class="kicker">Chapter 08 <span class="dim">· Part II — Distributed Data</span></p>
+        <h1>The Trouble with Distributed Systems</h1>
+        <p class="lede">Confront the three great liars of distributed computing — the network, the clock, and the paused process — and learn to build systems that keep their promises anyway.</p>
+        <div class="lesson-meta">
+          <span class="chip">Partial failure</span>
+          <span class="chip">Unreliable networks</span>
+          <span class="chip">Unreliable clocks</span>
+          <span class="chip">Fencing tokens</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pullquote container">
+      <p>“Hey I just met you / The network’s laggy / But here’s my data / So store it maybe”</p>
+      <cite>— Kyle Kingsbury, “Carly Rae Jepsen and the Perils of Network Partitions” (2013)</cite>
+    </div>
+
+    <div class="chapter-layout container">
+
+      <aside class="toc" aria-label="Chapter contents">
+        <p class="toc-title">Ch 8 contents</p>
+        <ul>
+          <li><a href="#s-intro">8.0 Pessimism to the max</a></li>
+          <li><a href="#s-partial" class="sub">Faults &amp; partial failure</a></li>
+          <li><a href="#s-cloud" class="sub">Clouds vs supercomputers</a></li>
+          <li><a href="#s-reliable" class="sub">Reliable from unreliable</a></li>
+          <li><a href="#s-network">8.1 Unreliable networks</a></li>
+          <li><a href="#s-failures" class="sub">Six ways to fail</a></li>
+          <li><a href="#s-practice" class="sub">Faults in practice</a></li>
+          <li><a href="#s-detect" class="sub">Detecting faults</a></li>
+          <li><a href="#s-timeouts" class="sub">Timeouts &amp; unbounded delays</a></li>
+          <li><a href="#s-queueing" class="sub">Congestion &amp; queueing</a></li>
+          <li><a href="#s-tcpudp" class="sub">TCP versus UDP</a></li>
+          <li><a href="#s-circuits" class="sub">Circuits vs packets</a></li>
+          <li><a href="#s-utilization" class="sub">Latency vs utilization</a></li>
+          <li><a href="#s-clocks">8.2 Unreliable clocks</a></li>
+          <li><a href="#s-twoclocks" class="sub">Time-of-day vs monotonic</a></li>
+          <li><a href="#s-ntp" class="sub">NTP &amp; accuracy</a></li>
+          <li><a href="#s-relying" class="sub">Relying on synced clocks</a></li>
+          <li><a href="#s-lww" class="sub">LWW &amp; data loss</a></li>
+          <li><a href="#s-interval" class="sub">Confidence intervals</a></li>
+          <li><a href="#s-spanner" class="sub">Spanner &amp; TrueTime</a></li>
+          <li><a href="#s-pauses" class="sub">Process pauses</a></li>
+          <li><a href="#s-realtime" class="sub">Real-time &amp; GC limits</a></li>
+          <li><a href="#s-truth">8.3 Knowledge, truth, lies</a></li>
+          <li><a href="#s-majority" class="sub">Truth by majority</a></li>
+          <li><a href="#s-leader" class="sub">The leader &amp; the lock</a></li>
+          <li><a href="#s-fencing" class="sub">Fencing tokens</a></li>
+          <li><a href="#s-byzantine" class="sub">Byzantine faults</a></li>
+          <li><a href="#s-models" class="sub">System models</a></li>
+          <li><a href="#s-safety" class="sub">Safety &amp; liveness</a></li>
+          <li><a href="#s-summary">8.4 Summary &amp; glossary</a></li>
+          <li><a href="#quiz-section">Quiz</a></li>
+        </ul>
+      </aside>
+
+      <div class="lesson-body">
+
+        <!-- ================= 8.0 ================= -->
+        <section class="block reveal" id="s-intro">
+          <p class="kicker">8.0 <span class="dim">·</span> The setup</p>
+          <h2>Pessimism to the maximum</h2>
+          <p>A recurring theme of this book is how systems handle things going wrong — replica failover, replication lag, weak isolation levels. This chapter turns the pessimism all the way up: <strong>anything that can go wrong, will go wrong</strong>. Experienced systems operators say that’s a reasonable assumption, and working with distributed systems is fundamentally different from writing software on a single computer — mainly because of <em>lots of new and exciting ways for things to go wrong</em>. The plan: networks first, then clocks, then what a node can actually know about the state of the world. The engineering goal throughout: <strong>build systems that do their job — meet the guarantees users expect — in spite of everything going wrong</strong>. (One exception is granted up front: faults are assumed to be non-Byzantine — nodes unreliable but honest — until the section on lying.)</p>
+
+          <h3 id="s-partial">8.0.1 — Faults and partial failure</h3>
+          <p>On a single computer, software behaves in a fairly predictable way: <strong>it works or it doesn’t</strong>. Buggy software may seem to have “a bad day” (often fixed by a reboot), but that’s a consequence of badly written software — when the hardware is working correctly, the same operation always produces the same result: it is <strong>deterministic</strong>. Hardware problems (memory corruption, a loose connector) usually cause <em>total</em> failure: a kernel panic, a blue screen, a machine that won’t start. An individual computer with good software is usually either fully functional or entirely broken, but not something in between.</p>
+          <p>That is a <strong>deliberate choice in the design of computers</strong>: if an internal fault occurs, we prefer a computer to crash completely rather than return a wrong result. The machine hides the fuzzy physical reality and presents an idealized system operating with mathematical perfection — a CPU instruction always does the same thing; data written to memory or disk stays intact. This goal of always-correct computation goes back to the very first digital computer.</p>
+          <p>Distributed systems break the deal. With software running on several computers connected by a network, <strong>there may well be some parts of the system that are broken in some unpredictable way, even though other parts are working fine — a <em>partial failure</em></strong>. Worse, partial failures are <strong>nondeterministic</strong>: try to do anything involving multiple nodes and the network, and it may sometimes work and sometimes unpredictably fail. You may not even know whether something <em>succeeded</em> — the time a message takes to cross the network is also nondeterministic. This nondeterminism and the possibility of partial failure are what make distributed systems hard to work with.</p>
+
+          <div class="callout story">
+            <p class="callout-title">From the trenches — Coda Hale</p>
+            <p>“In my limited experience I’ve dealt with long-lived network partitions in a single data center, PDU failures, switch failures, accidental power cycles of whole racks, whole-DC backbone failures, whole-DC power failures, and a hypoglycemic driver smashing his Ford pickup truck into a DC’s HVAC system. And I’m not even an ops guy.”</p>
+          </div>
+
+          <h3 id="s-cloud">8.0.2 — Cloud computing and supercomputing</h3>
+          <p>There’s a spectrum of philosophies for building large computers. <strong>High-performance computing (HPC)</strong>: supercomputers with thousands of CPUs for computationally intensive scientific work — weather forecasting, molecular dynamics; the job checkpoints state to durable storage from time to time, and if one node fails, you stop the entire cluster workload, repair the node, and restart from the last checkpoint. A supercomputer is more like a single-node computer than a distributed system: <strong>it deals with partial failure by letting it escalate into total failure</strong>. <strong>Cloud computing</strong> (a not-very-well-defined term) is associated with multi-tenant datacenters, commodity computers connected with an IP network (often Ethernet), elastic/on-demand resource allocation, and metered billing. Traditional <strong>enterprise datacenters</strong> lie somewhere between the two extremes.</p>
+          <p>Why internet services can’t follow the supercomputer model — six reasons:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Online vs. offline</h4><p>Internet applications are online — they must serve users with low latency at any time, and stopping the cluster for repair is not acceptable. An offline batch job like a weather simulation can stop and restart with fairly low impact.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Hardware reliability</h4><p>Supercomputers use specialized, quite-reliable nodes communicating through shared memory and RDMA. Cloud services use commodity machines — equivalent performance at lower cost through economies of scale, but higher failure rates.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Network topology</h4><p>Large datacenter networks run IP and Ethernet in Clos topologies for high bisection bandwidth. Supercomputers use specialized multi-dimensional meshes and toruses, better for HPC workloads with known communication patterns.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>Scale and fault probability</h4><p>The bigger a system gets, the more likely one of its components is broken. With thousands of nodes, it’s reasonable to assume <em>something is always broken</em> — and if your error handling is “give up,” the system spends more time recovering from faults than doing useful work.</p></div></div>
+            <div class="num-card"><span class="n">5.</span><div><h4>Fault tolerance pays off</h4><p>If the system tolerates failed nodes and keeps working as a whole, you get rolling upgrades — restart one node at a time while the service continues — and in the cloud, you can kill a poorly-performing VM and request a new one.</p></div></div>
+            <div class="num-card"><span class="n">6.</span><div><h4>Geographic distribution</h4><p>Geographically distributed deployments communicate over the internet — slow and unreliable compared to local networks. Supercomputers generally assume all nodes are close together.</p></div></div>
+          </div>
+          <p>The conclusion: <strong>to make distributed systems work, we must accept the possibility of partial failure and build fault-tolerance mechanisms into the software</strong> — a reliable system from unreliable components. Fault handling must be part of the software design, and you as the operator need to know what behavior to expect in the case of a fault. It would be unwise to assume faults are rare and simply hope for the best: consider a wide range of possible faults — even fairly unlikely ones — and artificially create them in your testing environment to see what happens. <strong>In distributed systems, suspicion, pessimism, and paranoia pay off.</strong></p>
+
+          <h3 id="s-reliable">8.0.3 — Building a reliable system from unreliable components</h3>
+          <p>Intuitively, a system can only be as reliable as its least reliable component — its weakest link. <strong>This is not the case</strong>, and it’s an old idea in computing (von Neumann, 1956) to construct a more reliable system from a less reliable underlying base:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Error-correcting codes</h4><p>Let digital data be transmitted accurately across a communication channel that occasionally gets some bits wrong — radio interference on a wireless network, for example.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>TCP over IP</h4><p>IP itself is unreliable — it may drop, delay, duplicate, or reorder packets. TCP provides a more reliable transport layer on top: missing packets retransmitted, duplicates eliminated, packets reassembled in order.</p></div></div>
+          </div>
+          <p>But there are limits to how much more reliable the system can be. Error-correcting codes handle a small number of single-bit errors, not a signal swamped by interference. TCP hides packet loss, duplication, and reordering — but <strong>it cannot magically remove delays in the network</strong>. The higher-level system isn’t perfect, but it’s still useful: it takes care of the tricky low-level faults, so the remaining faults are usually easier to reason about and deal with.</p>
+        </section>
+
+        <!-- ================= 8.1 ================= -->
+        <section class="block reveal" id="s-network">
+          <p class="kicker">8.1 <span class="dim">·</span> Liar #1</p>
+          <h2>Unreliable networks</h2>
+          <p>The book focuses on <strong>shared-nothing systems</strong>: a bunch of machines, each with its own memory and disk, connected by a network — the only way those machines can communicate. It’s the dominant approach for building internet services because it’s comparatively cheap (no special hardware), can make use of commoditized cloud computing services, and can achieve high reliability through redundancy across multiple geographically distributed datacenters.</p>
+          <p>The internet and most internal datacenter networks (often Ethernet) are <strong>asynchronous packet networks</strong>: one node can send a message to another, but <strong>the network gives no guarantees as to when it will arrive, or whether it will arrive at all</strong>. So if you send a request and don’t get a response, any of six things may have happened:</p>
+
+          <h3 id="s-failures">8.1.1 — Six ways a request can fail</h3>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Request lost</h4><p>Your request may have been lost — perhaps someone unplugged a network cable.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Request queued</h4><p>Your request may be waiting in a queue and will be delivered later — perhaps the network or the recipient is overloaded.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Remote node failed</h4><p>The remote node may have failed — perhaps it crashed or was powered down.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>Remote node stalled</h4><p>The remote node may have temporarily stopped responding — perhaps a long garbage collection pause — but it will start responding again later.</p></div></div>
+            <div class="num-card"><span class="n">5.</span><div><h4>Response lost</h4><p>The remote node may have processed your request, but the response has been lost on the network — perhaps a switch has been misconfigured.</p></div></div>
+            <div class="num-card"><span class="n">6.</span><div><h4>Response delayed</h4><p>The remote node may have processed your request, but the response is delayed and will be delivered later — perhaps the network or your own machine is overloaded.</p></div></div>
+          </div>
+
+          <div class="figure">
+            <p class="fig-head">Figure 8-1 (recreated) · Lost, dead, or slow — you can’t tell</p>
+            <svg viewBox="0 0 780 300" role="img" aria-label="If you send a request and don't get a response, it is not possible to distinguish whether the request was lost, the remote node is down, or the response was lost" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr8b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+                <marker id="arr8c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+              </defs>
+              <line x1="70" y1="66" x2="70" y2="236" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="710" y1="66" x2="710" y2="236" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <text x="70" y="46" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">SENDER</text>
+              <text x="710" y="46" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">REMOTE NODE</text>
+              <line x1="82" y1="90" x2="698" y2="90" stroke="#f0b35c" stroke-width="1.6" marker-end="url(#arr8b)"/>
+              <text x="390" y="80" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">request</text>
+              <circle cx="240" cy="90" r="13" fill="rgba(239,128,128,0.12)" stroke="#ef8080" stroke-width="1.4"/>
+              <text x="240" y="94" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10">a</text>
+              <text x="240" y="122" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="9.5">request lost in the network</text>
+              <rect x="626" y="104" width="168" height="60" rx="10" fill="rgba(239,128,128,0.06)" stroke="#ef8080" stroke-dasharray="5 4"/>
+              <circle cx="668" cy="134" r="13" fill="rgba(239,128,128,0.12)" stroke="#ef8080" stroke-width="1.4"/>
+              <text x="668" y="138" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10">b</text>
+              <text x="712" y="132" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="9.5">node down</text>
+              <text x="712" y="146" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="9.5">or paused</text>
+              <line x1="698" y1="206" x2="82" y2="206" stroke="#63dfc2" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arr8c)"/>
+              <text x="390" y="196" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10.5">response…?</text>
+              <circle cx="500" cy="206" r="13" fill="rgba(239,128,128,0.12)" stroke="#ef8080" stroke-width="1.4"/>
+              <text x="500" y="210" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10">c</text>
+              <text x="500" y="238" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="9.5">response lost or delayed</text>
+              <rect x="150" y="254" width="480" height="38" rx="10" fill="rgba(239,128,128,0.08)" stroke="#ef8080"/>
+              <text x="390" y="271" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10.5">a, b, and c are indistinguishable —</text>
+              <text x="390" y="286" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9.5">the only information you have: you haven’t received a response yet</text>
+            </svg>
+            <p class="fig-caption">The sender can’t even tell whether the packet was delivered: the only option is for the recipient to send a response message, which may in turn be lost or delayed. The usual remedy is a <strong>timeout</strong>: after some time you give up waiting and assume the response is not going to arrive. But when the timeout fires, you <em>still</em> don’t know whether the remote node got your request — and if it’s still queued somewhere, it may yet be delivered even after you’ve given up on it.</p>
+          </div>
+
+          <h3 id="s-practice">8.1.2 — Network faults in practice</h3>
+          <p>We have been building computer networks for decades — one might hope we’d have figured out reliability by now. We have not:</p>
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-value red">12</span>
+              <span class="stat-label">Network faults per month, one medium-sized datacenter study</span>
+              <span class="stat-note">half disconnected a single machine · half disconnected an entire rack</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value red">&gt; 1 min</span>
+              <span class="stat-label">Packet delays from one switch software upgrade</span>
+              <span class="stat-note">topology reconfiguration — the network “worked,” just very slowly</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value red">1-way</span>
+              <span class="stat-label">A NIC that dropped all inbound packets but sent outbound fine</span>
+              <span class="stat-note">a link working in one direction says nothing about the other direction</span>
+            </div>
+          </div>
+          <p>Studies measuring top-of-rack switches, aggregation switches, and load balancers found that <strong>adding redundant networking gear doesn’t reduce faults as much as you might hope</strong>, because it doesn’t guard against human error — misconfigured switches are a major cause of outages. Public cloud services such as EC2 are notorious for frequent transient network glitches; well-managed private datacenter networks can be stabler environments, but <strong>nobody is immune from network problems</strong>. Sharks have even been known to bite and damage undersea cables.</p>
+          <div class="callout warn">
+            <p class="callout-title">If the error handling of network faults is not defined and tested</p>
+            <p>Arbitrarily bad things could happen: a cluster could become deadlocked and permanently unable to serve requests, even when the network recovers — or it could even delete all of your data. If software is put in an unanticipated situation, it may do arbitrary unexpected things.</p>
+          </div>
+          <p>Handling network faults doesn’t necessarily mean tolerating them — if the network is normally reliable, showing users an error message during a rare outage is a valid response. But <strong>you do need to know how your software reacts to network problems</strong>, and to ensure the system can recover from them — which is why deliberately triggering network problems and testing the response (the idea behind Chaos Monkey) makes sense. One vocabulary note: when one part of the network is cut off from the rest due to a network fault, that’s a <strong>network partition</strong> (or netsplit); the book sticks with the more general term <em>network fault</em> to avoid confusion with partitions (shards) of a storage system.</p>
+
+          <h3 id="s-detect">8.1.3 — Detecting faults</h3>
+          <p>Many systems need to automatically detect faulty nodes: a load balancer needs to stop sending requests to a dead node (take it out of rotation), and in a distributed database with single-leader replication, a failed leader means one of the followers needs to be promoted. Unfortunately, the uncertainty about the network makes it difficult to tell whether a node is working. Rapid, explicit feedback exists sometimes — situational, not always available:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>The OS refuses the connection</h4><p>If you can reach the machine but no process is listening on the destination port, the OS closes or refuses the TCP connection (an RST or FIN in reply). But if the node crashed <em>while handling</em> your request, you have no way of knowing how much of the data was actually processed.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Scripted crash notification</h4><p>If the node process crashed (or was killed by an administrator) but the OS still runs, a script can notify the other nodes about the crash so another can take over quickly, without waiting for a timeout — HBase does this.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Switch management interface</h4><p>If you have access to the network switches in your datacenter, you can query them to detect link failures at the hardware level (e.g., a remote machine powered down). Ruled out when connecting via the internet, in a shared datacenter, or when the management interface is itself unreachable.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>ICMP Destination Unreachable</h4><p>A router that is sure an IP address is unreachable may reply with an ICMP Destination Unreachable packet. But routers have no magic failure-detection capability — they are subject to the same network limitations as everyone else.</p></div></div>
+          </div>
+          <p>Rapid feedback about a remote node being down is useful, but <strong>you can’t count on it</strong>. <strong>Even if TCP acknowledges that a packet was delivered, the application may have crashed before handling it.</strong> If you want to be sure a request was successful, you need a positive response from the application itself; conversely, if something has gone wrong, you may get an error response at some level of the stack, but in general you must assume you’ll get no response at all. In practice: retry a few times (TCP retries transparently, and you may also retry at the application level), wait for a timeout, and eventually declare the node dead if you don’t hear back.</p>
+
+          <h3 id="s-timeouts">8.1.4 — Timeouts and unbounded delays</h3>
+          <p>If a timeout is the only sure way of detecting a fault, then <strong>how long should the timeout be? There is unfortunately no simple answer.</strong> A long timeout means a long wait until a node is declared dead — users have to wait, or see error messages. A short timeout detects faults faster, but carries a higher risk of incorrectly declaring a node dead when in fact it has only suffered a temporary slowdown, due to a load spike on the node or the network. And prematurely declaring a node dead is problematic: if the node is actually alive and in the middle of performing some action — sending an email, say — and another node takes over, the action may end up being performed twice.</p>
+          <p>Worse: when a node is declared dead, its responsibilities are transferred to other nodes, adding load to nodes and network that are <em>already struggling</em>. If a node was merely slow due to overload, transferring its load elsewhere can make everything collapse — in the extreme case, all nodes declare each other dead and everything stops working: a <strong>cascading failure</strong>.</p>
+          <p>Imagine a fictitious system whose network guaranteed a maximum delay for packets: every packet is delivered within time <strong>d</strong>, or it is lost — delivery never takes longer. Assume every non-failed node always handles a request within time <strong>r</strong>. Then every successful request receives a response within <strong>2d + r</strong>, and if you don’t receive a response within that time, you know the network or the node is not working. 2d + r would be a reasonable timeout. <strong>Unfortunately, most systems we work with have neither guarantee.</strong> Asynchronous networks have <strong>unbounded delays</strong> — they try to deliver packets as quickly as possible, but there is no upper limit on the time it may take for a packet to arrive — and most server implementations cannot guarantee they handle requests within some maximum time. For failure detection, it’s not sufficient for the system to be fast most of the time: if your timeout is low, it only takes a transient spike in round-trip times to throw the system off balance.</p>
+
+          <h3 id="s-queueing">8.1.5 — Network congestion and queueing</h3>
+          <p>The variability of packet delays on computer networks is most often due to <strong>queueing</strong> — just as travel times on road networks vary mostly due to traffic congestion. Four places your packet waits:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>The network switch</h4><p>If several different nodes simultaneously try to send packets to the same destination, the switch must queue them and feed them into the destination link one by one. On a busy link a packet may wait a while for a slot — and if so much data arrives that the switch queue fills up, the packet is dropped and needs to be resent, even though the network is functioning fine.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>The destination OS</h4><p>When a packet reaches the destination machine and all CPU cores are currently busy, the incoming request is queued by the operating system until the application is ready to handle it — which may take an arbitrary length of time depending on the machine’s load.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>The virtual machine monitor</h4><p>In virtualized environments, a running OS is often paused for tens of milliseconds while another virtual machine uses a CPU core. During that time the VM cannot consume any data from the network, so incoming data is queued (buffered) by the VM monitor, further increasing the variability of delays.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>The TCP sender itself</h4><p>TCP performs <strong>flow control</strong> (also known as congestion avoidance or backpressure): a node limits its own rate of sending to avoid overloading a network link or the receiving node — meaning additional queueing at the sender, before the data even enters the network.</p></div></div>
+          </div>
+
+          <div class="figure">
+            <p class="fig-head">Figure 8-2 (recreated) · The switch queue fills up</p>
+            <svg viewBox="0 0 780 310" role="img" aria-label="Ports 1, 2, and 4 are all trying to send packets to port 3, so the switch queue fills up and a packet gets dropped" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr8d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+                <marker id="arr8e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+                <marker id="arr8f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#ef8080"/>
+                </marker>
+              </defs>
+              <rect x="290" y="70" width="200" height="170" rx="14" fill="#151c30" stroke="#2b3859" stroke-width="1.4"/>
+              <text x="390" y="56" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="11">NETWORK SWITCH</text>
+              <text x="390" y="146" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10">queue</text>
+              <text x="390" y="162" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="10">nearly full</text>
+              <rect x="308" y="172" width="34" height="16" rx="3" fill="rgba(240,179,92,0.55)"/>
+              <rect x="348" y="172" width="34" height="16" rx="3" fill="rgba(240,179,92,0.55)"/>
+              <rect x="388" y="172" width="34" height="16" rx="3" fill="rgba(240,179,92,0.55)"/>
+              <rect x="428" y="172" width="34" height="16" rx="3" fill="rgba(240,179,92,0.25)" stroke="#f0b35c" stroke-dasharray="3 2"/>
+              <rect x="60" y="76" width="40" height="26" rx="5" fill="#1a2133" stroke="#f0b35c"/>
+              <text x="80" y="93" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="10">port 1</text>
+              <rect x="118" y="82" width="26" height="14" rx="3" fill="rgba(240,179,92,0.5)"/>
+              <rect x="118" y="100" width="26" height="14" rx="3" fill="rgba(240,179,92,0.35)"/>
+              <line x1="146" y1="97" x2="288" y2="105" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr8d)"/>
+              <rect x="60" y="146" width="40" height="26" rx="5" fill="#1a2133" stroke="#f0b35c"/>
+              <text x="80" y="163" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="10">port 2</text>
+              <rect x="118" y="152" width="26" height="14" rx="3" fill="rgba(240,179,92,0.5)"/>
+              <rect x="118" y="170" width="26" height="14" rx="3" fill="rgba(240,179,92,0.35)"/>
+              <line x1="146" y1="167" x2="288" y2="167" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr8d)"/>
+              <rect x="60" y="216" width="40" height="26" rx="5" fill="#1a2133" stroke="#f0b35c"/>
+              <text x="80" y="233" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="10">port 4</text>
+              <rect x="118" y="222" width="26" height="14" rx="3" fill="rgba(240,179,92,0.5)"/>
+              <rect x="118" y="240" width="26" height="14" rx="3" fill="rgba(240,179,92,0.35)"/>
+              <line x1="146" y1="237" x2="288" y2="215" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr8d)"/>
+              <line x1="466" y1="182" x2="530" y2="216" stroke="#ef8080" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arr8f)"/>
+              <rect x="536" y="210" width="30" height="16" rx="3" fill="rgba(239,128,128,0.3)" stroke="#ef8080"/>
+              <text x="600" y="222" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="9.5">dropped — resend!</text>
+              <rect x="680" y="146" width="40" height="26" rx="5" fill="#1a2133" stroke="#63dfc2"/>
+              <text x="700" y="163" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10">port 3</text>
+              <line x1="490" y1="159" x2="676" y2="159" stroke="#63dfc2" stroke-width="1.6" marker-end="url(#arr8e)"/>
+              <text x="583" y="149" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9.5">one link — packets fed in one by one</text>
+              <text x="390" y="286" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">ports 1, 2, and 4 all send to port 3: the queue fills, packets get dropped and resent —</text>
+              <text x="390" y="301" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="10">the network is “functioning fine,” yet everything is slower</text>
+            </svg>
+            <p class="fig-caption">TCP considers a packet lost if it is not acknowledged within some timeout, calculated from observed round-trip times, and retransmits lost packets automatically. The application does not see the packet loss or the retransmission — <strong>but it does see the resulting delay</strong> (waiting for the timeout to expire, then for the retransmission to be acknowledged). And queueing delays have an especially wide range when a system is close to its maximum capacity: a system with plenty of spare capacity drains queues easily; in a highly utilized system, long queues can build up very quickly.</p>
+          </div>
+
+          <h3 id="s-tcpudp">8.1.6 — TCP versus UDP</h3>
+          <p>Some latency-sensitive applications — videoconferencing, VoIP — use <strong>UDP</strong> rather than TCP, trading reliability for consistency of delays. UDP does not perform flow control and does not retransmit lost packets, avoiding some reasons for variable network delays (though it is still susceptible to switch queues and scheduling delays). It’s a good choice when <strong>delayed data is worthless</strong>: in a VoIP phone call there isn’t enough time to retransmit a lost packet before its data is due to be played over the loudspeakers, so the application fills the missing packet’s time slot with silence — a brief interruption — and moves on in the stream. The retry happens at the human layer: <em>“Could you repeat that please? The sound just cut out for a moment.”</em></p>
+
+          <h3 id="s-circuits">8.1.7 — Synchronous versus asynchronous networks</h3>
+          <p>Why can’t we solve this at the hardware level and make the network reliable so the software doesn’t need to worry? The traditional fixed-line telephone network (non-cellular, non-VoIP) is extremely reliable — delayed audio frames and dropped calls are very rare, because a phone call requires constantly low end-to-end latency and enough bandwidth to transfer your voice. When you make a call, the network establishes a <strong>circuit</strong>: a fixed, guaranteed amount of bandwidth allocated for the call, along the entire route between the two callers, remaining in place until the call ends. An ISDN network runs at a fixed rate of <strong>4,000 frames per second</strong>; when a call is established, it is allocated <strong>16 bits of space within each frame</strong> in each direction — so for the whole call, each side is guaranteed to send exactly 16 bits of audio every <strong>250 microseconds</strong>.</p>
+          <p>That kind of network is <strong>synchronous</strong>: even as data passes through several routers, it does not suffer from queueing, because the space for the call has already been reserved at the next hop. No queueing means a fixed maximum end-to-end latency — a <strong>bounded delay</strong>. A circuit is fundamentally different from a TCP connection: it is a fixed amount of reserved bandwidth that nobody else can use while it is established, whereas packets of a TCP connection opportunistically use whatever bandwidth is available — you can give TCP a variable-sized block of data (an email, a web page) and it will transfer it in the shortest time possible, and while a TCP connection is idle it uses essentially no bandwidth. Ethernet and IP are <strong>packet-switched</strong> protocols: no concept of a circuit, hence queueing and unbounded delays.</p>
+          <p>Why did data networks choose packet switching? Because <strong>data traffic is bursty</strong>. A call needs a constant bits-per-second rate, which suits a circuit. But requesting a web page, sending an email, or transferring a file has no particular bandwidth requirement — you just want it to complete as quickly as possible. Over a circuit you would have to guess a bandwidth allocation: guess too low and the transfer is unnecessarily slow, leaving network capacity unused; guess too high and the circuit cannot be set up at all, because the network cannot guarantee a reservation it can’t fulfill. TCP, by contrast, dynamically adapts the rate of data transfer to the available network capacity. Hybrids exist — ATM (Asynchronous Transfer Mode) tried to support both circuit and packet switching; InfiniBand implements end-to-end flow control at the link layer; quality of service (prioritization and scheduling of packets) and admission control (rate-limiting senders) can emulate circuit switching or provide statistically bounded delay — but such quality of service is currently <strong>not enabled in multi-tenant datacenters and public clouds, or when communicating via the internet</strong>.</p>
+
+          <h3 id="s-utilization">8.1.8 — Latency and resource utilization</h3>
+          <p>Variable delays are a consequence of <strong>dynamic resource partitioning</strong>. A wire between two telephone switches can carry up to <strong>10,000 simultaneous calls</strong>; each circuit occupies one of those call slots, and the resource is divided statically — even if you’re the only call on the wire, with all other 9,999 slots unused, your circuit gets the same fixed bandwidth as when the wire is fully utilized. The internet shares network bandwidth dynamically: senders push and jostle to get their packets over the wire as quickly as possible, and the switches decide moment to moment which packet goes. Downside: queueing. Advantage: <strong>maximum utilization of the wire</strong> — it has a fixed cost, so better utilization makes each byte cheaper. The same trade-off appears with CPUs: sharing each core dynamically between several threads means a thread sometimes waits in the OS’s run queue while another runs — but it utilizes the hardware better than statically allocated CPU cycles, and it’s also a major motivation for virtual machines.</p>
+          <div class="callout note">
+            <p class="callout-title">The economic punchline</p>
+            <p>Latency guarantees are achievable in certain environments if resources are statically partitioned — dedicated hardware, exclusive bandwidth allocations — but it comes at the cost of reduced utilization, in other words, it is more expensive. Multi-tenancy with dynamic resource partitioning provides better utilization, so it is cheaper, but it has the downside of variable delays. <strong>Variable delays in networks are not a law of nature, but simply the result of a cost/benefit trade-off.</strong> Most non-safety-critical systems choose cheap and unreliable over expensive and reliable.</p>
+          </div>
+          <p>The practical conclusion: currently deployed technology gives us no guarantees about network delays or reliability, so we have to assume congestion, queueing, and unbounded delays will happen — <strong>and consequently there is no “correct” value for timeouts. They need to be determined experimentally</strong>, by measuring the distribution of network round-trip times over an extended period.</p>
+        </section>
+
+        <!-- ================= 8.2 ================= -->
+        <section class="block reveal" id="s-clocks">
+          <p class="kicker">8.2 <span class="dim">·</span> Liar #2</p>
+          <h2>Unreliable clocks</h2>
+          <p>Clocks and time are important. Applications depend on them for everyday questions: <em>Has this request timed out yet? What’s the 99th percentile response time of this service? How many queries per second did this service handle on average in the last five minutes? How long did the user spend on our site? When was this article published? At what date and time should the reminder email be sent? When does this cache entry expire? What is the timestamp on this error message in the log file?</em> Note the split: the first four measure <strong>durations</strong> (a time interval, e.g., between a request being sent and its response received); the last four describe <strong>points in time</strong> (events that occur on a particular date, at a particular time).</p>
+          <p>In a distributed system, time is tricky because <strong>communication is not instantaneous</strong>: the time a message is received is always later than the time it was sent, and due to variable network delays we don’t know how much later — which sometimes makes it difficult to determine the order in which things happened across machines. And each machine has its own clock, an actual hardware device — usually a <strong>quartz crystal oscillator</strong> — that is not perfectly accurate, so every node has its own notion of time, slightly faster or slower than the others.</p>
+
+          <h3 id="s-twoclocks">8.2.1 — Monotonic versus time-of-day clocks</h3>
+          <p>Modern computers have at least two different kinds of clocks, and it’s important to distinguish them since they serve different purposes:</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Time-of-day clock <span class="tag">wall-clock</span></h4>
+              <p>Returns the current date and time according to some calendar: <code>clock_gettime(CLOCK_REALTIME)</code> on Linux, <code>System.currentTimeMillis()</code> in Java. The value is the number of seconds or milliseconds since the <strong>epoch</strong> — midnight UTC on January 1, 1970, Gregorian calendar, leap seconds not counted. Usually synchronized with NTP, so timestamps from one machine (ideally) mean the same as on another.</p>
+              <ul>
+                <li>If the local clock is too far ahead of the NTP server, it may be <strong>forcibly reset</strong>, appearing to <strong>jump back</strong> to a previous point in time</li>
+                <li>These jumps, and the habit of ignoring leap seconds, make it <strong>unsuitable for measuring elapsed time</strong></li>
+                <li>Historically quite coarse-grained (steps of 10 ms on older Windows systems); less of a problem on recent systems</li>
+              </ul>
+            </div>
+            <div class="term">
+              <h4>Monotonic clock <span class="tag">durations</span></h4>
+              <p>The right tool for measuring a duration — a timeout, a service’s response time: <code>clock_gettime(CLOCK_MONOTONIC)</code> on Linux, <code>System.nanoTime()</code> in Java. The name comes from the guarantee that it <strong>always moves forward</strong> (a time-of-day clock may jump back).</p>
+              <ul>
+                <li>The <strong>absolute value is meaningless</strong> — perhaps nanoseconds since the computer started — so it makes no sense to compare monotonic values from two different computers</li>
+                <li>Multi-socket servers may have a separate timer per CPU; the OS compensates, but take the monotonicity guarantee “with a pinch of salt”</li>
+                <li>NTP may <strong>slew</strong> the rate — speeding it up or slowing it down by up to 0.05% — but can never make it jump; resolution is usually microseconds or better</li>
+                <li>For measuring elapsed time in a distributed system (e.g., timeouts), usually fine: no cross-node synchronization assumed</li>
+              </ul>
+            </div>
+          </div>
+
+          <h3 id="s-ntp">8.2.2 — Clock synchronization and accuracy</h3>
+          <p>Monotonic clocks don’t need synchronization, but time-of-day clocks must be set according to an <strong>NTP server</strong> (which gets its time from a more accurate source, such as a GPS receiver) to be useful. Unfortunately, “our methods for getting a clock to tell the correct time aren’t nearly as reliable or accurate as you might hope — hardware clocks and NTP can be fickle beasts.” Eight ways it goes wrong:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Quartz drift</h4><p>The quartz clock runs faster or slower than it should, varying with the machine’s temperature. Google assumes a drift of <strong>200 ppm</strong> (parts per million) for its servers — up to <strong>6 ms</strong> for a clock resynchronized every 30 seconds, or <strong>17 seconds</strong> for one resynchronized once a day. This limits the best possible accuracy even when everything works correctly.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Refusal and forced resets</h4><p>If a computer’s clock differs too much from the NTP server, the server may refuse to synchronize, or the local clock will be forcibly reset — applications observing the time before and after may see time go backward or suddenly jump forward.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Firewalled off from NTP</h4><p>If a node is accidentally firewalled off from its NTP servers, the misconfiguration may go unnoticed for some time — anecdotal evidence says this does happen in practice.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>The network is the limit</h4><p>NTP synchronization can only be as good as the network delay. One experiment showed a minimum error of <strong>35 ms</strong> when synchronizing over the internet; occasional spikes in network delay lead to errors of around a second, and large delays can make the client give up entirely.</p></div></div>
+            <div class="num-card"><span class="n">5.</span><div><h4>Wrong NTP servers</h4><p>Some NTP servers are wrong or misconfigured, reporting time off by hours. Clients are quite robust — they query several servers and ignore outliers — but “it’s somewhat worrying to bet the correctness of your systems on the time that you were told by a stranger on the internet.”</p></div></div>
+            <div class="num-card"><span class="n">6.</span><div><h4>Leap seconds</h4><p>A minute that is 59 or 61 seconds long messes up timing assumptions and has crashed many large systems. Best fix may be <strong>smearing</strong>: making NTP servers “lie” by performing the leap second adjustment gradually over the course of a day. Actual server behavior varies in practice.</p></div></div>
+            <div class="num-card"><span class="n">7.</span><div><h4>Virtual machines</h4><p>The hardware clock is virtualized, and when a CPU core is shared between VMs, each is paused for tens of milliseconds while another runs — from the application’s point of view, the clock suddenly jumps forward.</p></div></div>
+            <div class="num-card"><span class="n">8.</span><div><h4>Devices you don’t fully control</h4><p>On mobile or embedded devices, you probably can’t trust the hardware clock at all — some users deliberately set it to a wildly incorrect time, for example to circumvent timing limitations in games.</p></div></div>
+          </div>
+          <p>Very good accuracy <em>is</em> possible if you care enough to invest significant resources: the <strong>MiFID II</strong> draft European regulation requires all high-frequency trading funds to synchronize clocks to within <strong>100 microseconds of UTC</strong> — to help debug market anomalies like “flash crashes” and detect manipulation. That can be achieved with GPS receivers, the Precision Time Protocol (PTP), and careful deployment and monitoring, but it requires significant effort and expertise; a misconfigured NTP daemon or a blocking firewall can let drift grow quickly.</p>
+
+          <h3 id="s-relying">8.2.3 — Relying on synchronized clocks</h3>
+          <p>The problem with clocks: while they seem simple and easy to use, they have a surprising number of pitfalls — a day may not have exactly 86,400 seconds, time-of-day clocks may move backward, and the time on one node may be quite different from the time on another. The parallel with networks is exact: even though networks are well behaved most of the time, software must be designed on the assumption that the network will occasionally be faulty — and the same is true of clocks. The nastiest part: <strong>incorrect clocks easily go unnoticed</strong>. A defective CPU or misconfigured network makes a machine fail loudly and get fixed; a defective quartz or misconfigured NTP client keeps “working fine” while drifting further and further from reality — and software relying on an accurately synchronized clock tends to fail as <em>silent, subtle data loss</em>, not a dramatic crash. If you use software that requires synchronized clocks, it is essential to carefully monitor clock offsets between all the machines, and <strong>declare dead and remove any node whose clock drifts too far from the others</strong>.</p>
+
+          <h3 id="s-lww">8.2.4 — Timestamps for ordering events: LWW loses data</h3>
+          <p>If two clients write to a distributed database, who got there first — which write is the more recent? Tagging each write with a timestamp from the time-of-day clock of the node where it originated, and keeping the newest value, is called <strong>last write wins (LWW)</strong> — widely used in multi-leader replication and leaderless databases such as Cassandra and Riak. (Some implementations generate timestamps on the client rather than the server; the fundamental problems don’t change.) Here is the failure:</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 8-3 (recreated) · Two clocks disagree, and the increment is lost</p>
+            <svg viewBox="0 0 780 400" role="img" aria-label="Client A writes x=1 on node 1 with timestamp 42.004; client B increments x to 2 on node 3 with timestamp 42.003; on node 2, last-write-wins keeps x=1 and drops the causally-later x=2" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr8g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+                <marker id="arr8h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+              </defs>
+              <line x1="110" y1="66" x2="110" y2="310" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="390" y1="66" x2="390" y2="310" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="670" y1="66" x2="670" y2="310" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <text x="110" y="46" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">NODE 1</text>
+              <text x="390" y="46" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="12">NODE 2</text>
+              <text x="670" y="46" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">NODE 3</text>
+              <text x="110" y="61" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="8.5">(clock reads high)</text>
+              <text x="670" y="61" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="8.5">(clock reads low)</text>
+              <circle cx="110" cy="92" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="110" y="96" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">1</text>
+              <rect x="20" y="108" width="180" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="110" y="127" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10">client A: write x = 1</text>
+              <rect x="45" y="144" width="130" height="22" rx="11" fill="rgba(240,179,92,0.1)" stroke="#f0b35c"/>
+              <text x="110" y="159" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9.5">timestamp 42.004 s</text>
+              <line x1="140" y1="192" x2="655" y2="202" stroke="#5b6478" stroke-width="1.2" stroke-dasharray="3 3"/>
+              <text x="390" y="187" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="9">x = 1 replicates to node 3; client B then increments it — causally later</text>
+              <circle cx="670" cy="204" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="670" y="208" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">2</text>
+              <rect x="580" y="220" width="180" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="670" y="239" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10">client B: x → 2 (inc)</text>
+              <rect x="605" y="256" width="130" height="22" rx="11" fill="rgba(99,223,194,0.09)" stroke="#63dfc2"/>
+              <text x="670" y="271" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9.5">timestamp 42.003 s</text>
+              <line x1="205" y1="216" x2="356" y2="278" stroke="#f0b35c" stroke-width="1.6" marker-end="url(#arr8g)"/>
+              <text x="252" y="232" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">replicate x = 1</text>
+              <text x="252" y="244" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">(ts 42.004)</text>
+              <line x1="600" y1="286" x2="424" y2="286" stroke="#63dfc2" stroke-width="1.6" marker-end="url(#arr8h)"/>
+              <text x="511" y="280" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">replicate x = 2 (ts 42.003)</text>
+              <rect x="120" y="302" width="540" height="56" rx="10" fill="rgba(239,128,128,0.08)" stroke="#ef8080"/>
+              <text x="390" y="324" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="11">node 2 (LWW): 42.004 &gt; 42.003 → keep x = 1, drop x = 2</text>
+              <text x="390" y="342" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9.5">client B’s increment is lost — even though it unambiguously happened later</text>
+              <text x="390" y="382" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="9.5">clock skew here is less than 3 ms — a very good synchronization — and it still loses data</text>
+            </svg>
+            <p class="fig-caption">When a write is replicated to other nodes, it is tagged with a timestamp according to the <em>originating node’s</em> time-of-day clock. The clock synchronization here is very good — node 1 and node 3 are skewed by less than 3 ms — yet the timestamps fail to order the events correctly: the write <code>x&nbsp;=&nbsp;1</code> carries timestamp 42.004&nbsp;s while the causally-later write <code>x&nbsp;=&nbsp;2</code> carries 42.003&nbsp;s. When node 2 receives both, it concludes that <code>x&nbsp;=&nbsp;1</code> is the more recent value and drops the write <code>x&nbsp;=&nbsp;2</code>. Client B’s increment is silently lost.</p>
+          </div>
+
+          <p>Three problems with LWW, beyond the figure:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Writes mysteriously disappear</h4><p>A node with a lagging clock is unable to overwrite values previously written by a node with a fast clock until the clock skew between the nodes has elapsed. Arbitrary amounts of data can be silently dropped — without any error reported to the application.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Sequential vs. concurrent — can’t tell</h4><p>LWW cannot distinguish writes that occurred sequentially in quick succession (client B’s increment definitely occurs after client A’s write) from writes that were truly concurrent. Additional causality tracking, such as <strong>version vectors</strong>, is needed to prevent violations of causality.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Timestamp ties</h4><p>Two nodes can independently generate writes with the same timestamp — especially when the clock has only millisecond resolution. An arbitrary tiebreaker (which can simply be a large random number) is required, but that approach can also violate causality.</p></div></div>
+          </div>
+          <p>Could NTP synchronization be made accurate enough that such incorrect orderings cannot occur? <strong>Probably not.</strong> NTP’s accuracy is itself limited by the network round-trip time, in addition to other error sources like quartz drift — and for correct ordering you need the clock source to be significantly more accurate than the thing you are measuring, namely network delay. Even with tightly NTP-synchronized clocks you can send a packet at timestamp 100 ms (by the sender’s clock) and have it arrive at timestamp 99 ms (by the recipient’s clock) — it appears to arrive before it was sent, which is impossible. The safer alternative for ordering events is <strong>logical clocks</strong>, based on incrementing counters rather than an oscillating quartz crystal: they don’t measure the time of day or the seconds elapsed, only the relative ordering of events. Time-of-day and monotonic clocks, which measure actual elapsed time, are together known as <strong>physical clocks</strong>.</p>
+
+          <h3 id="s-interval">8.2.5 — Clock readings have a confidence interval</h3>
+          <p>You may be able to read a machine’s time-of-day clock with microsecond or even nanosecond resolution — but that doesn’t mean the value is actually accurate to such precision. Drift in an imprecise quartz clock can easily be several milliseconds, even if synchronized with NTP on the local network every minute. With NTP over the public internet, the best possible accuracy is probably to the tens of milliseconds, and the error may easily spike to over 100 ms with network congestion. <strong>A clock reading isn’t a point in time — it is more like a range of times, a confidence interval.</strong> A system may be 95% confident that the time now is between 10.3 and 10.5 seconds past the minute, but it doesn’t know any more precisely than that. If you only know the time ±100 ms, the microsecond digits in the timestamp are essentially meaningless. Unfortunately, <strong>most systems don’t expose this uncertainty</strong>: <code>clock_gettime()</code> returns a value with no expected error, so you don’t know whether its confidence interval is five milliseconds or five years.</p>
+
+          <h3 id="s-spanner">8.2.6 — Synchronized clocks for global snapshots: Spanner and TrueTime</h3>
+          <p>Snapshot isolation is a very useful feature for databases that need both small, fast read-write transactions and large, long-running read-only ones (backups, analytics): read-only transactions see the database in a consistent state at a particular point in time. The most common implementation requires a <strong>monotonically increasing transaction ID</strong> — writes with a greater ID than the snapshot are invisible to it. On a single-node database, a simple counter suffices. But when the database is distributed across many machines, potentially in multiple datacenters, a <em>globally</em> monotonically increasing transaction ID is difficult to generate, because it requires coordination — and the ID must reflect causality (if transaction B reads a value written by transaction A, B must have a higher ID, or the snapshot isn’t consistent). With lots of small, rapid transactions, this becomes an untenable bottleneck. So: can the timestamps from synchronized time-of-day clocks serve as transaction IDs? If the synchronization were good enough, they’d have the right properties — later transactions get higher timestamps. The problem is the uncertainty about clock accuracy.</p>
+          <p><strong>Google Spanner</strong> implements snapshot isolation across datacenters exactly this way, using the clock’s confidence interval as reported by its <strong>TrueTime API</strong> — which explicitly returns two values, an <code>earliest</code> and a <code>latest</code> possible timestamp, instead of a point. The key observation: if two confidence intervals A&nbsp;=&nbsp;[A<sub>earliest</sub>,&nbsp;A<sub>latest</sub>] and B&nbsp;=&nbsp;[B<sub>earliest</sub>,&nbsp;B<sub>latest</sub>] do <strong>not overlap</strong>, then B definitely happened after A — no doubt about it. Only if the intervals overlap are we unsure of the order. So <strong>Spanner deliberately waits for the length of the confidence interval before committing a read-write transaction</strong>, ensuring any transaction that may read the data is at a sufficiently later time that the intervals don’t overlap. And to keep that wait short, it keeps the clock uncertainty small:</p>
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-value">7 ms</span>
+              <span class="stat-label">Clock uncertainty inside Google datacenters</span>
+              <span class="stat-note">a GPS receiver or atomic clock in each DC — keeps Spanner’s commit wait short</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value teal">[earliest, latest]</span>
+              <span class="stat-label">What TrueTime returns instead of a point</span>
+              <span class="stat-note">the interval’s width depends on how long since the local quartz was last synced to a better clock</span>
+            </div>
+          </div>
+          <p>Using clock synchronization for distributed transaction semantics is an area of active research — the ideas are interesting, but they have not yet been implemented in mainstream databases outside of Google.</p>
+
+          <h3 id="s-pauses">8.2.7 — Process pauses</h3>
+          <p>One more dangerous use of clocks. Consider a database with a single leader per partition, where only the leader is allowed to accept writes. How does a node know that it <em>still is</em> the leader — that it hasn’t been declared dead by the others — and that it may safely accept writes? One option is for the leader to obtain a <strong>lease</strong> from the other nodes, similar to a lock with a timeout: only one node can hold the lease at any one time; when a node obtains it, it knows it is the leader for some amount of time, until the lease expires; to remain leader, it must periodically renew the lease before expiry. If the node fails, it stops renewing, and another can take over when the lease expires:</p>
+          <div class="code-block">while (true) {
+    request = getIncomingRequest();
+    <span class="cm">// Ensure that the lease always has at least 10 seconds remaining</span>
+    if (lease.expiryTimeMillis - System.currentTimeMillis() &lt; 10000) {
+        lease = lease.renew();
+    }
+    if (lease.isValid()) {
+        process(request);
+    }
+}</div>
+          <p>Two problems with this code. <strong>First, it depends on synchronized clocks</strong>: the lease’s expiry time is set by a different machine (perhaps calculated there as current time plus 30 seconds) but compared to the local system clock — if the clocks are out of sync by more than a few seconds, this code will start doing strange things. <strong>Second, and more fundamentally, process pauses</strong>: even switching the protocol to use only the local monotonic clock doesn’t fix it. The code assumes very little time passes between the point it checks the time and the point the request is processed. Normally it runs so quickly that the 10-second buffer is more than enough. But what if there is an unexpected pause — the thread stops for <strong>15 seconds</strong> right around the <code>lease.isValid()</code> line before continuing? The lease will likely have expired by the time the request is processed, and another node has already taken over as leader. <strong>There is nothing to tell this thread that it was paused for so long</strong> — it won’t notice the lease has expired until the next iteration of the loop, by which time it may have already done something unsafe. Six reasons a thread might be paused:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Garbage collection</h4><p>Stop-the-world GC pauses have sometimes been known to last for <strong>several minutes</strong>. Even so-called “concurrent” collectors like HotSpot JVM’s CMS cannot fully run in parallel with the application — they, too, must stop the world from time to time. Tuning helps, but for robust guarantees, assume the worst.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Virtual machine suspension</h4><p>A VM can be suspended (pausing all processes and saving memory to disk) and resumed (restoring memory and continuing execution) — sometimes used for live migration of VMs between hosts without a reboot. The pause can occur at any time and last arbitrarily long.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>End-user device suspension</h4><p>On laptops, execution may be suspended and resumed arbitrarily — when the user closes the lid.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>OS context switching</h4><p>When the OS context-switches to another thread, or the hypervisor switches to a different VM, the running thread can be paused at any arbitrary point in the code. (CPU time spent in other VMs is known as <strong>steal time</strong>.) Under heavy load, it may take a while before the paused thread runs again.</p></div></div>
+            <div class="num-card"><span class="n">5.</span><div><h4>Synchronous disk access</h4><p>A thread may pause waiting for slow disk I/O — which can happen surprisingly, e.g., Java classloaders lazily loading class files at any point in execution. If the disk is actually a network filesystem or network block device (such as Amazon’s EBS), the latency is further subject to network variability. I/O pauses and GC pauses may even conspire to combine their delays.</p></div></div>
+            <div class="num-card"><span class="n">6.</span><div><h4>Swapping to disk (paging)</h4><p>A simple memory access may trigger a page fault requiring a page from disk — possibly evicting another page first. Under memory pressure the OS may spend most of its time swapping pages in and out, getting little done (<strong>thrashing</strong>) — which is why paging is often disabled on server machines.</p></div></div>
+          </div>
+          <p>And one more: a Unix process can be paused with the <strong>SIGSTOP</strong> signal (Ctrl-Z in a shell) and gets no CPU again until <strong>SIGCONT</strong> — even if your environment never uses it deliberately, it might be sent accidentally by an operations engineer. The common thread: <strong>all of these occurrences can preempt the running thread at any point and resume it at some later time, without the thread even noticing.</strong> It’s like making multi-threaded code on a single machine thread-safe — you can’t assume anything about timing, because arbitrary context switches and parallelism may occur. On a single machine we have decent tools for that (mutexes, semaphores, atomic counters, lock-free data structures, blocking queues), but they don’t translate to distributed systems, which have no shared memory — only messages over an unreliable network. So: <strong>a node must assume that its execution can be paused for a significant length of time at any point, even in the middle of a function. During the pause, the rest of the world keeps moving and may even declare the paused node dead because it’s not responding. Eventually it resumes — without even noticing it was asleep, until it checks its clock sometime later.</strong></p>
+
+          <h3 id="s-realtime">8.2.8 — Response time guarantees, and limiting GC’s impact</h3>
+          <p>Those reasons for pausing can be eliminated if you try hard enough, and some software runs where failure to respond in time causes serious damage: computers that control aircraft, rockets, robots, cars, and other physical objects. These have a specified <strong>deadline</strong> by which the software must respond — miss it, and the entire system may fail. These are <strong>hard real-time systems</strong>: “if your car’s onboard sensors detect that you are currently experiencing a crash, you wouldn’t want the release of the airbag to be delayed due to an inopportune GC pause.” Delivering on that requires:</p>
+          <ul class="checklist">
+            <li>A <strong>real-time operating system (RTOS)</strong> that allows processes to be scheduled with a guaranteed allocation of CPU time in specified intervals</li>
+            <li>Library functions that <strong>document their worst-case execution times</strong></li>
+            <li>Dynamic memory allocation restricted or disallowed entirely (real-time garbage collectors exist, but the application must still ensure it doesn’t give the GC too much to do)</li>
+            <li>An enormous amount of <strong>testing and measurement</strong> to ensure the guarantees are being met</li>
+          </ul>
+          <p>All of this requires a large amount of additional work and severely restricts the range of languages, libraries, and tools. Developing real-time systems is very expensive; they mostly appear in safety-critical embedded devices. And <strong>“real-time” is not “high-performance”</strong>: real-time systems may actually have lower throughput, since they must prioritize timely responses above all else. For most server-side data processing, real-time guarantees are simply not economical or appropriate — so those systems must suffer the pauses and clock instability of a non-real-time environment. What you can do is mitigate GC pauses without real-time scheduling:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Treat GC pauses as brief planned outages</h4><p>Let other nodes handle requests while one node is collecting its garbage. If the runtime can warn that a GC pause is soon required, the node can stop sending new requests, wait for outstanding requests to finish, then perform GC while no requests are in progress — hiding the pause from clients and reducing the high percentiles of response time. Some latency-sensitive financial trading systems use this approach.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>GC only short-lived objects, restart periodically</h4><p>Use GC only for short-lived objects (fast to collect) and restart processes periodically, before they accumulate enough long-lived objects to require a full GC. Restart one node at a time with traffic shifted away first — like a rolling upgrade.</p></div></div>
+          </div>
+          <p>These measures can’t fully prevent garbage collection pauses, but they usefully reduce their impact on the application.</p>
+        </section>
+
+        <!-- ================= 8.3 ================= -->
+        <section class="block reveal" id="s-truth">
+          <p class="kicker">8.3 <span class="dim">·</span> Liar #3</p>
+          <h2>Knowledge, truth, and lies</h2>
+          <p>Put the chapter so far together: no shared memory, only message passing over an unreliable network with variable delays, partial failures, unreliable clocks, and processing pauses. It follows that <strong>a node in the network cannot know anything for sure — it can only make guesses based on the messages it receives (or doesn’t receive) via the network.</strong> A node can only find out what state another node is in by exchanging messages with it; if the remote node doesn’t respond, there is no way of knowing what state it is in, because network problems cannot reliably be distinguished from node problems. The questions border on the philosophical — what do we know to be true or false, how sure can we be if our mechanisms for perception and measurement are unreliable, should software systems obey the laws we expect of the physical world, such as cause and effect? The practical answer is enough: <strong>state your assumptions as a system model, and design the system so it meets them. Algorithms can be proved to function correctly within a certain system model</strong> — reliable behavior is achievable even when the underlying model provides very few guarantees. It is, however, not straightforward to do so.</p>
+
+          <h3 id="s-majority">8.3.1 — The truth is defined by the majority</h3>
+          <p>Imagine a network with an <strong>asymmetric fault</strong>: a node is able to receive all messages sent to it, but any outgoing messages from that node are dropped or delayed. The node works perfectly well and is receiving requests from other nodes — but nobody can hear its responses. After a timeout, the other nodes declare it dead. “The semi-disconnected node is dragged to the graveyard, kicking and screaming ‘I’m not dead!’ — but since nobody can hear its screaming, the funeral procession continues with stoic determination.” The node may even notice its messages aren’t being acknowledged and realize there must be a fault in the network — but it is still wrongly declared dead. Or the third scenario: a node experiences a long stop-the-world GC pause — every thread frozen for one minute, no requests processed, no responses sent. The other nodes wait, retry, grow impatient, and declare it dead. Then the GC finishes, and the threads continue as if nothing had happened — “the supposedly dead node suddenly raises its head out of the coffin, in full health, and starts cheerfully chatting with bystanders.” From the GCing node’s perspective, hardly any time has passed since it was last talking to the others.</p>
+          <p>The moral: <strong>a node cannot necessarily trust its own judgment of a situation</strong> — and a distributed system cannot exclusively rely on a single node, which may fail at any time and leave the system stuck. So many distributed algorithms rely on a <strong>quorum</strong>: voting among the nodes, with decisions requiring some minimum number of votes from several nodes — including decisions about declaring nodes dead. <strong>If a quorum of nodes declares another node dead, then it must be considered dead, even if that node still very much feels alive</strong> — the individual node must abide by the quorum decision and step down. Most commonly, the quorum is an <strong>absolute majority</strong> of more than half the nodes: with <strong>three nodes, one failure can be tolerated; with five nodes, two</strong>. And it remains safe, because there can only be one majority in the system — there cannot be two majorities with conflicting decisions at the same time.</p>
+
+          <h3 id="s-leader">8.3.2 — The leader and the lock</h3>
+          <p>Frequently, a system requires there to be only one of some thing: <strong>only one node</strong> allowed to be the leader for a database partition (avoiding split brain); <strong>only one transaction or client</strong> allowed to hold the lock for a particular resource or object (preventing concurrent writes from corrupting it); <strong>only one user</strong> allowed to register a particular username (a username must uniquely identify a user). Implementing this in a distributed system requires care: <strong>even if a node believes it is “the chosen one” — the leader, the lock holder, the first to grab the username — that doesn’t necessarily mean a quorum of nodes agrees.</strong> The node may have formerly been the leader, but if the others declared it dead in the meantime (a network interruption, a GC pause), it may already have been demoted and a new leader elected. If it keeps acting as the chosen one and other nodes believe it, the system as a whole may do something incorrect:</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 8-4 (recreated) · The stale lease that corrupts a file</p>
+            <svg viewBox="0 0 780 380" role="img" aria-label="Client 1 acquires a lease, then GC-pauses so long that the lease expires; client 2 acquires the lease and writes; client 1 resumes believing it still holds the lease and writes too, so the file is corrupted" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr8k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#ef8080"/>
+                </marker>
+              </defs>
+              <line x1="110" y1="66" x2="110" y2="300" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="670" y1="66" x2="670" y2="300" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <text x="110" y="46" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">CLIENT 1</text>
+              <text x="670" y="46" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">CLIENT 2</text>
+              <text x="390" y="46" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="9">storage service: a file only one client may write at a time</text>
+              <circle cx="110" cy="84" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="110" y="88" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">1</text>
+              <rect x="28" y="70" width="248" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="152" y="89" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10">lock service: lease acquired ✓</text>
+              <circle cx="110" cy="152" r="12" fill="rgba(239,128,128,0.12)" stroke="#ef8080"/>
+              <text x="110" y="156" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="9">2</text>
+              <rect x="18" y="128" width="270" height="76" rx="10" fill="rgba(239,128,128,0.07)" stroke="#ef8080" stroke-dasharray="6 4"/>
+              <text x="153" y="150" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10.5">⏸ stop-the-world GC pause…</text>
+              <text x="153" y="168" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="9.5">…lease expires while frozen.</text>
+              <text x="153" y="188" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9">the thread notices nothing</text>
+              <circle cx="670" cy="216" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="670" y="220" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">3</text>
+              <rect x="492" y="202" width="262" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="623" y="221" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10">lease expires → client 2 acquires</text>
+              <circle cx="670" cy="260" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="670" y="264" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">4</text>
+              <rect x="492" y="246" width="262" height="30" rx="8" fill="rgba(99,223,194,0.08)" stroke="#63dfc2"/>
+              <text x="623" y="265" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10">client 2 writes to the file ✓</text>
+              <circle cx="110" cy="284" r="12" fill="rgba(239,128,128,0.12)" stroke="#ef8080"/>
+              <text x="110" y="288" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="9">5</text>
+              <rect x="18" y="272" width="286" height="28" rx="8" fill="rgba(239,128,128,0.07)" stroke="#ef8080"/>
+              <text x="161" y="290" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10">pause ends → client 1 writes too (!)</text>
+              <line x1="304" y1="290" x2="488" y2="274" stroke="#ef8080" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arr8k)"/>
+              <rect x="160" y="322" width="460" height="44" rx="10" fill="rgba(239,128,128,0.08)" stroke="#ef8080"/>
+              <text x="390" y="340" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10.5">two clients write under “protection” of the same lease</text>
+              <text x="390" y="356" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9.5">writes clash → file corrupted — this was a real HBase bug</text>
+            </svg>
+            <p class="fig-caption">The client holding the lease is paused for too long, its lease expires, another client obtains a lease for the same file and starts writing — and when the paused client comes back, it <em>still believes</em> it holds a valid lease and proceeds to write as well. The clients’ writes clash and corrupt the file. Not theoretical: HBase used to have exactly this problem.</p>
+          </div>
+
+          <h3 id="s-fencing">8.3.3 — Fencing tokens</h3>
+          <p>The fix for a node under a false belief of being “the chosen one” — so it cannot disrupt the rest of the system — is a fairly simple technique called <strong>fencing</strong>. Every time the lock server grants a lock or lease, it also returns a <strong>fencing token</strong>: a number that increases every time a lock is granted. Every time a client sends a write request to the storage service, it must include its current fencing token. <strong>The storage server remembers the highest token it has already processed and rejects any write with an older one</strong>:</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 8-5 (recreated) · Writes only in order of increasing fencing tokens</p>
+            <svg viewBox="0 0 780 380" role="img" aria-label="Client 1 acquires a lease with token 33 and GC-pauses; client 2 acquires token 34 and writes successfully; client 1 resumes and sends its write with token 33, which the storage server rejects" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr8l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+                <marker id="arr8m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#ef8080"/>
+                </marker>
+              </defs>
+              <line x1="110" y1="66" x2="110" y2="300" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <line x1="670" y1="66" x2="670" y2="300" stroke="#2b3859" stroke-width="1.2" stroke-dasharray="4 4"/>
+              <text x="110" y="46" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="12">CLIENT 1</text>
+              <text x="670" y="46" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="12">CLIENT 2</text>
+              <text x="390" y="46" text-anchor="middle" fill="#636d83" font-family="monospace" font-size="9">lock service grants a monotonically increasing token with every lease</text>
+              <circle cx="110" cy="84" r="12" fill="rgba(240,179,92,0.14)" stroke="#f0b35c"/>
+              <text x="110" y="88" text-anchor="middle" fill="#f0b35c" font-family="monospace" font-size="9">1</text>
+              <rect x="28" y="70" width="230" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="143" y="89" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10">lease acquired → token 33</text>
+              <circle cx="110" cy="152" r="12" fill="rgba(239,128,128,0.12)" stroke="#ef8080"/>
+              <text x="110" y="156" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="9">2</text>
+              <rect x="18" y="128" width="270" height="60" rx="10" fill="rgba(239,128,128,0.07)" stroke="#ef8080" stroke-dasharray="6 4"/>
+              <text x="153" y="150" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10.5">⏸ GC pause — lease expires</text>
+              <text x="153" y="172" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9">token 33 is now stale, but client 1 doesn’t know</text>
+              <circle cx="670" cy="216" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="670" y="220" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">3</text>
+              <rect x="472" y="202" width="282" height="30" rx="8" fill="#151c30" stroke="#2b3859"/>
+              <text x="613" y="221" text-anchor="middle" fill="#d9e0ee" font-family="monospace" font-size="10">client 2 acquires lease → token 34</text>
+              <circle cx="670" cy="260" r="12" fill="rgba(99,223,194,0.12)" stroke="#63dfc2"/>
+              <text x="670" y="264" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="9">4</text>
+              <rect x="472" y="246" width="282" height="30" rx="8" fill="rgba(99,223,194,0.08)" stroke="#63dfc2"/>
+              <text x="613" y="265" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10">write(token 34) → storage: accepted ✓</text>
+              <line x1="754" y1="261" x2="764" y2="261" stroke="#63dfc2" stroke-width="1" stroke-dasharray="2 2"/>
+              <circle cx="110" cy="284" r="12" fill="rgba(239,128,128,0.12)" stroke="#ef8080"/>
+              <text x="110" y="288" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="9">5</text>
+              <rect x="8" y="272" width="300" height="28" rx="8" fill="rgba(239,128,128,0.07)" stroke="#ef8080"/>
+              <text x="158" y="290" text-anchor="middle" fill="#ef8080" font-family="monospace" font-size="10">pause ends → write(token 33) ✗ REJECTED</text>
+              <line x1="308" y1="288" x2="468" y2="274" stroke="#ef8080" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arr8m)"/>
+              <rect x="160" y="322" width="460" height="44" rx="10" fill="rgba(99,223,194,0.07)" stroke="#63dfc2"/>
+              <text x="390" y="340" text-anchor="middle" fill="#63dfc2" font-family="monospace" font-size="10.5">the number always increases: 33 &lt; 34, so the stale write is fenced out</text>
+              <text x="390" y="356" text-anchor="middle" fill="#8d97ad" font-family="monospace" font-size="9.5">the zombie client may believe whatever it likes — the storage server decides</text>
+            </svg>
+            <p class="fig-caption">Client 1 acquires the lease with a token of 33, then goes into a long pause and the lease expires. Client 2 acquires the lease with a token of 34 — the number always increases — and sends its write, including the token, which the storage accepts. Later, client 1 comes back to life and sends its write with token 33; the storage server, having already processed a write with token 34, rejects it.</p>
+          </div>
+
+          <p>If ZooKeeper is used as the lock service, the transaction ID <code>zxid</code> or the node version <code>cversion</code> can serve as the fencing token, since both are guaranteed to be monotonically increasing. The critical requirement: <strong>the resource itself must take an active role in checking tokens, rejecting any writes with an older token than one already processed.</strong> It is <em>not</em> sufficient to rely on clients checking their own lock status — the paused client doesn’t know its lease expired; that’s the whole problem. For resources that don’t explicitly support fencing tokens, workarounds exist (e.g., include the token in the filename for a file storage service) — but some kind of check is necessary to avoid processing requests outside the lock’s protection.</p>
+          <div class="callout note">
+            <p class="callout-title">Server-side checking is a feature, not a bug</p>
+            <p>Checking a token on the server side may seem like a downside, but it is arguably a good thing. It is unwise for a service to assume that its clients will always be well behaved — the clients are often run by people whose priorities are very different from those of the service’s operators (at the launch of Halo 4, clients effectively DDoSed the services). Any good service should protect itself from accidentally abusive clients.</p>
+          </div>
+
+          <h3 id="s-byzantine">8.3.4 — Byzantine faults</h3>
+          <p>Fencing tokens can detect and block a node that is <em>inadvertently</em> acting in error — but a node that deliberately wanted to subvert the system’s guarantees could simply send messages with a fake fencing token. In this book we assume <strong>nodes are unreliable but honest</strong>: they may be slow or never respond, their state may be outdated — but if a node does respond, it is telling the “truth” as best it knows it, playing by the rules of the protocol. Distributed systems problems become much harder if there is a risk that nodes may “lie” — send arbitrary faulty or corrupted responses, for example claiming to have received a particular message when it didn’t. Such behavior is a <strong>Byzantine fault</strong>, and the problem of reaching consensus in this untrusting environment is the <strong>Byzantine Generals Problem</strong>.</p>
+          <p>The Byzantine Generals Problem generalizes the older <strong>Two Generals Problem</strong>: two army generals need to agree on a battle plan, communicating only by messenger — and the messengers sometimes get delayed or lost, exactly like packets in a network. The Byzantine version: there are <em>n</em> generals who need to agree, most of them loyal and sending truthful messages — but there are <strong>traitors</strong> among them, who may try to deceive and confuse the others by sending fake or untrue messages while trying to remain undiscovered. And it is not known in advance who the traitors are.</p>
+          <div class="callout story">
+            <p class="callout-title">Why “Byzantine”?</p>
+            <p>Byzantium was an ancient Greek city that later became Constantinople, on the site of present-day Istanbul — and there’s no historic evidence that the generals of Byzantium were any more prone to intrigue and conspiracy than those elsewhere. The name comes from “Byzantine” in the sense of excessively complicated, bureaucratic, devious — used in politics long before computers. Lamport wanted a nationality that wouldn’t offend any readers, and was advised that calling it “The Albanian Generals Problem” was not such a good idea.</p>
+          </div>
+          <p>A system is <strong>Byzantine fault-tolerant</strong> if it continues to operate correctly even if some nodes are malfunctioning and not obeying the protocol, or if malicious attackers are interfering with the network. Where that concern is real:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Aerospace environments</h4><p>Data in a computer’s memory or CPU registers could become corrupted by radiation, leading a node to respond in arbitrarily unpredictable ways. Since a system failure would be very expensive — an aircraft crashing and killing everyone on board, a rocket colliding with the ISS — flight control systems must tolerate Byzantine faults.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Multi-organization systems</h4><p>Some participants may attempt to cheat or defraud the others, so it isn’t safe to simply trust another node’s messages. Peer-to-peer networks like Bitcoin and other blockchains can be considered a way of getting mutually untrusting parties to agree whether a transaction happened, without relying on a central authority.</p></div></div>
+          </div>
+          <p>In the kinds of systems this book discusses, we can usually safely assume there are no Byzantine faults: in your datacenter, all nodes are controlled by your organization, and radiation levels are low enough that memory corruption isn’t a major problem. Byzantine protocols are quite complicated; fault-tolerant embedded systems rely on hardware-level support; in most server-side data systems, the cost of deploying Byzantine fault-tolerant solutions makes them impractical. Web applications <em>do</em> need to expect arbitrary and malicious behavior from clients under end-user control — that’s why input validation, sanitization, and output escaping (against SQL injection and cross-site scripting) are so important — but the standard approach is making <strong>the server the authority</strong> on what client behavior is and isn’t allowed, not Byzantine protocols. Two sobering notes: a software <em>bug</em> could be regarded as a Byzantine fault, but if you deploy the same software to all nodes, a Byzantine fault-tolerant algorithm cannot save you — most such algorithms require a <strong>supermajority of more than two-thirds</strong> of nodes functioning correctly (with four nodes, at most one may malfunction), so you’d need four independent implementations and hope a bug appears in only one. And a protocol can’t protect you from security compromises either: an attacker who can compromise one node can probably compromise all of them, since they probably run the same software. Traditional mechanisms — authentication, access control, encryption, firewalls — remain the main protection against attackers.</p>
+          <p>Even without full Byzantine tolerance, guarding against <strong>weak forms of lying</strong> is worthwhile — simple, pragmatic steps that wouldn’t withstand a determined adversary but improve reliability: application-level <strong>checksums</strong> (network packets occasionally get corrupted in ways that evade the built-in TCP/UDP checksums), <strong>input validation</strong> for publicly accessible services (range checks, string size limits to prevent memory-exhaustion DoS; even internal services benefit from sanity checks in protocol parsing), and <strong>NTP’s approach</strong> — configure multiple server addresses, estimate each server’s error, require a majority to agree on a time range, and exclude outliers, so a single misconfigured server is detected.</p>
+
+          <h3 id="s-models">8.3.5 — System model and reality</h3>
+          <p>Many algorithms have been designed to solve distributed systems problems — the consensus solutions of Chapter 9 among them — and to be useful, they must tolerate the faults of this chapter while not depending too heavily on the details of particular hardware and software. That requires formalizing the faults we expect: a <strong>system model</strong> is an abstraction that describes what things an algorithm may assume. Two axes. First, <strong>timing</strong>:</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Synchronous model</h4>
+              <p>Assumes <strong>bounded</strong> network delay, bounded process pauses, and bounded clock error — not exactly synchronized clocks or zero delay, just known upper bounds that are never exceeded. <strong>Not a realistic model of most practical systems</strong>: unbounded delays and pauses do occur.</p>
+            </div>
+            <div class="term">
+              <h4>Partially synchronous model</h4>
+              <p>The system behaves like a synchronous system <em>most of the time</em>, but sometimes exceeds the bounds — after which network delay, pauses, and clock error may become arbitrarily large. <strong>A realistic model of many systems</strong>: networks and processes are mostly well behaved (otherwise we’d never get anything done), but any timing assumption may occasionally be shattered.</p>
+            </div>
+            <div class="term">
+              <h4>Asynchronous model</h4>
+              <p>An algorithm is not allowed to make any timing assumptions — in fact it doesn’t even have a clock, so it cannot use timeouts. Very restrictive, but some algorithms can still be designed for it.</p>
+            </div>
+          </div>
+          <p>Second, <strong>node failures</strong>:</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Crash-stop faults</h4>
+              <p>An algorithm may assume that a node can fail in only one way — by crashing. The node may suddenly stop responding at any moment, and thereafter it is gone forever: it never comes back.</p>
+            </div>
+            <div class="term">
+              <h4>Crash-recovery faults</h4>
+              <p>Nodes may crash at any moment, and perhaps start responding again after some unknown time. Stable storage (nonvolatile disk) is preserved across crashes; the in-memory state is assumed to be lost.</p>
+            </div>
+            <div class="term">
+              <h4>Byzantine (arbitrary) faults</h4>
+              <p>Nodes may do absolutely anything, including trying to trick and deceive other nodes — as described above.</p>
+            </div>
+          </div>
+          <p>For modeling real systems, <strong>the partially synchronous model with crash-recovery faults is generally the most useful model</strong>. How do algorithms cope with it? First we need to say what “correct” means.</p>
+
+          <h3 id="s-safety">8.3.6 — Correctness, safety, and liveness</h3>
+          <p>To define what it means for an algorithm to be correct, we describe its <strong>properties</strong> — like a sorting algorithm’s output having the property that for any two distinct elements, the one further left is smaller. For a fencing-token generator, three properties:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Uniqueness</h4><p>No two requests for a fencing token return the same value.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Monotonic sequence</h4><p>If request <em>x</em> returned token <em>t<sub>x</sub></em>, and request <em>y</em> returned token <em>t<sub>y</sub></em>, and <em>x</em> completed before <em>y</em> began, then <em>t<sub>x</sub></em> &lt; <em>t<sub>y</sub></em>.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Availability</h4><p>A node that requests a fencing token and does not crash eventually receives a response.</p></div></div>
+          </div>
+          <p>An algorithm is <strong>correct</strong> in some system model if it always satisfies its properties in all situations that we assume may occur in that model. But that seems odd — if all nodes crash, or all network delays become infinitely long, no algorithm gets anything done. The resolution is distinguishing two kinds of properties:</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Safety <span class="tag">“nothing bad happens”</span></h4>
+              <p>If a safety property is violated, we can point at a particular point in time at which it was broken — a particular operation that returned a duplicate fencing token — and after the violation, the damage is done; <strong>it cannot be undone</strong>. Uniqueness and monotonic sequence are safety properties. For distributed algorithms it is common to require that safety properties always hold, in all possible situations — even if all nodes crash or the entire network fails, the algorithm must not return a wrong result.</p>
+            </div>
+            <div class="term">
+              <h4>Liveness <span class="tag">“something good eventually happens”</span></h4>
+              <p>A liveness property may not hold at some point in time — a node may have sent a request and not yet received a response — <strong>but there is always hope that it may be satisfied in the future</strong>. The giveaway: liveness properties often include the word “eventually” in their definition — and yes, eventual consistency is a liveness property. With liveness we are allowed caveats: a response comes only if a majority of nodes have not crashed, and only if the network eventually recovers — which is exactly what the partially synchronous model promises (any period of interruption lasts only a finite duration).</p>
+            </div>
+          </div>
+          <p>The distinction helps us deal with difficult system models — and it maps cleanly onto the fencing tokens: <strong>safety must hold unconditionally; liveness may carry caveats</strong>.</p>
+
+          <h4>Mapping system models to the real world</h4>
+          <p>Safety, liveness, and system models are very useful for reasoning about correctness — but when you implement an algorithm in practice, the messy facts of reality bite again, and it becomes clear that the system model is a simplified abstraction. Algorithms in the crash-recovery model assume data in stable storage survives crashes — but what if data on disk is corrupted, or wiped out by a hardware error or misconfiguration? What if a server has a firmware bug and fails to recognize its hard drives on reboot, even though the drives are correctly attached? Quorum algorithms rely on a node remembering the data it claims to have stored — if a node suffers amnesia and forgets, the quorum condition, and thus the correctness of the algorithm, breaks; a new model where stable storage <em>mostly</em> survives would be harder to reason about. Theoretical descriptions can declare that certain things are simply assumed not to happen — a real implementation may still need code for the impossible case, which may boil down to <code>printf("Sucks to be you")</code> and <code>exit(666)</code> — letting a human operator clean up the mess. (This is arguably the difference between computer science and software engineering.)</p>
+          <p>None of which makes the abstract models worthless — quite the opposite. They are incredibly helpful for distilling the complexity of real systems down to a manageable set of faults we can reason about, so we can understand the problem and solve it systematically. We can prove algorithms correct by showing their properties always hold in some system model — <strong>but proving an algorithm correct does not mean its implementation on a real system will necessarily always behave correctly</strong>. It is a very good first step, because the theoretical analysis can uncover problems that might remain hidden until unusual circumstances defeat your assumptions. <strong>Theoretical analysis and empirical testing are equally important.</strong></p>
+        </section>
+
+        <!-- ================= 8.4 ================= -->
+        <section class="block reveal" id="s-summary">
+          <p class="kicker">8.4 <span class="dim">·</span> Pulling it together</p>
+          <h2>Summary</h2>
+          <p>The chapter covered three families of problems. <strong>Networks</strong>: whenever you try to send a packet, it may be lost or arbitrarily delayed — and so may the reply; if you don’t get a reply, you have no idea whether the message got through. <strong>Clocks</strong>: a node’s clock may be significantly out of sync with other nodes despite your best NTP efforts, and it may suddenly jump forward or back; relying on it is dangerous because you most likely don’t have a good measure of your clock’s error interval. <strong>Process pauses</strong>: a process may pause for a substantial amount of time at any point in its execution (perhaps a stop-the-world GC), be declared dead by other nodes, and come back to life without realizing it was paused.</p>
+          <p><strong>The possibility of partial failures is the defining characteristic of distributed systems</strong> — so we build tolerance of partial failure into the software, letting the system as a whole continue functioning even when some of its constituent parts are broken. Two hard parts. Detecting faults: most systems have no accurate mechanism for it — timeouts are the tool, but they can’t distinguish network from node failures, and variable delay sometimes causes a node to be falsely suspected of crashing. Worse, a node can be degraded rather than dead — a Gigabit network interface suddenly dropping to 1 Kb/s throughput from a driver bug — a “limping” node can be harder to deal with than a cleanly failed one. Tolerating faults: once detected, there’s no global variable, no shared memory, no common knowledge between the machines — nodes can’t even agree on what time it is, let alone anything more profound. The only way information flows is over the unreliable network, so major decisions cannot be safely made by a single node: we need protocols that enlist other nodes and get a quorum to agree.</p>
+          <p>A single-computer perspective, for contrast: if you’re used to the idealized mathematical perfection of one machine — the same operation always returning the same result — the messy physical reality of distributed systems is a bit of a shock. Distributed systems engineers often regard a problem as trivial if it can be solved on a single computer, and a single computer can do a lot nowadays. <strong>If you can avoid opening Pandora’s box and keep things on one machine, it’s generally worth doing so</strong> — but scalability isn’t the only reason to distribute: fault tolerance and low latency (placing data geographically close to users) can’t be achieved with a single node. And the unreliability is not an inevitable law of nature: hard real-time response guarantees and bounded network delays are possible, but expensive, with lower hardware utilization — most non-safety-critical systems choose cheap and unreliable over expensive and reliable. Supercomputers, which assume reliable components, must be stopped and restarted entirely when a component fails; distributed systems can run forever without service-level interruption, handling faults and maintenance at the node level — at least in theory, because in practice a bad configuration change rolled out to all nodes will still bring the whole thing to its knees. This chapter was all problems and a bleak outlook; the next one is finally about solutions: algorithms that cope.</p>
+
+          <h3>Glossary</h3>
+          <dl class="kv">
+            <div class="kv-row"><dt>partial failure</dt><dd>Some parts of the system broken in unpredictable ways while others work fine. Nondeterministic — may sometimes work and sometimes fail, and you may not even know whether something succeeded. The defining characteristic of distributed systems.</dd></div>
+            <div class="kv-row"><dt>deterministic</dt><dd>On a single, correctly functioning computer: the same operation always produces the same result. A deliberate design choice — computers prefer to crash completely rather than return a wrong result.</dd></div>
+            <div class="kv-row"><dt>shared-nothing</dt><dd>Architecture where each machine has its own memory and disk; the network is the only communication channel. Cheap, commoditized, and the dominant approach for internet services.</dd></div>
+            <div class="kv-row"><dt>asynchronous packet network</dt><dd>One node can send a message to another, but the network gives no guarantees as to when it will arrive, or whether it will arrive at all. The internet and most datacenter networks (Ethernet).</dd></div>
+            <div class="kv-row"><dt>network partition (netsplit)</dt><dd>One part of the network cut off from the rest due to a network fault. The book prefers the general term “network fault” to avoid confusion with storage-system partitions (shards).</dd></div>
+            <div class="kv-row"><dt>timeout</dt><dd>After some time, give up waiting and assume the response is not going to arrive. The only sure way to detect a fault — yet still tells you nothing about whether the request was received.</dd></div>
+            <div class="kv-row"><dt>unbounded delays</dt><dd>No upper limit on the time a packet may take to arrive. Asynchronous networks try to deliver as fast as possible, but promise nothing.</dd></div>
+            <div class="kv-row"><dt>cascading failure</dt><dd>Declaring slow (not dead) nodes dead transfers their load to others, which then also slow down, get declared dead… until everything stops working.</dd></div>
+            <div class="kv-row"><dt>flow control (backpressure)</dt><dd>TCP limits its own rate of sending to avoid overloading a network link or the receiving node — queueing the data before it even enters the network.</dd></div>
+            <div class="kv-row"><dt>circuit switching</dt><dd>A fixed, guaranteed amount of bandwidth allocated along the entire route for the duration of a call. No queueing, bounded delay, static partitioning — good for constant-bit-rate audio, wasteful for bursty data.</dd></div>
+            <div class="kv-row"><dt>packet switching</dt><dd>Packets opportunistically use whatever bandwidth is available; the rate adapts dynamically. Better utilization, but queueing and unbounded delays.</dd></div>
+            <div class="kv-row"><dt>synchronous network</dt><dd>Bounded delay: space is reserved at every hop, so there is no queueing and the maximum end-to-end latency is fixed — like the traditional telephone network.</dd></div>
+            <div class="kv-row"><dt>time-of-day clock</dt><dd>Current date/time according to a calendar, since the epoch (midnight UTC, Jan 1 1970). Usually NTP-synchronized; may jump backward. Good for points in time, unsuitable for durations.</dd></div>
+            <div class="kv-row"><dt>monotonic clock</dt><dd>Always moves forward; the right tool for measuring durations (timeouts, response times). Absolute value meaningless, not comparable across computers. NTP may slew its rate by up to ±0.05% but can never jump it.</dd></div>
+            <div class="kv-row"><dt>slewing</dt><dd>NTP adjusting the frequency (rate) at which the monotonic clock moves forward — speeding it up or slowing it down by up to 0.05% — as opposed to stepping (jumping) the time-of-day clock.</dd></div>
+            <div class="kv-row"><dt>clock drift</dt><dd>The tendency of a quartz crystal oscillator to run faster or slower than it should, varying with temperature. Google assumes 200 ppm: up to 6 ms between 30-second resyncs, or 17 seconds for daily resyncs.</dd></div>
+            <div class="kv-row"><dt>NTP</dt><dd>Network Time Protocol: adjusts the computer clock according to the time reported by a group of servers (which use GPS or similar). Accuracy limited by network delay — 35 ms minimum over the internet; robust clients query several servers and ignore outliers.</dd></div>
+            <div class="kv-row"><dt>leap second</dt><dd>A minute that is 59 or 61 seconds long. Has crashed many large systems. Smearing — spreading the adjustment gradually over a day — is the kinder alternative.</dd></div>
+            <div class="kv-row"><dt>last write wins (LWW)</dt><dd>Conflict resolution that keeps the value with the latest timestamp and discards others. On time-of-day clocks it silently loses data to clock skew, can’t distinguish sequential from concurrent writes, and needs arbitrary tiebreakers.</dd></div>
+            <div class="kv-row"><dt>logical clocks</dt><dd>Based on incrementing counters (Lamport), not quartz. Measure only the relative ordering of events — a safer basis for ordering than timestamps. Physical clocks (time-of-day + monotonic) measure actual time.</dd></div>
+            <div class="kv-row"><dt>confidence interval</dt><dd>A clock reading is not a point but a range of times within which the actual time is believed to lie. If you only know the time ±100 ms, the microsecond digits are meaningless.</dd></div>
+            <div class="kv-row"><dt>TrueTime API</dt><dd>Google Spanner’s clock API that explicitly reports the confidence interval — earliest and latest possible timestamps. Spanner waits out the interval before committing, and GPS receivers/atomic clocks in each datacenter keep it to about 7 ms.</dd></div>
+            <div class="kv-row"><dt>lease</dt><dd>Similar to a lock with a timeout: only one node can hold it, and it must be periodically renewed before expiry. Basis of the “am I still the leader?” mechanism — and breakable by process pauses.</dd></div>
+            <div class="kv-row"><dt>stop-the-world GC pause</dt><dd>All running threads paused by the garbage collector — sometimes for several minutes. Even “concurrent” collectors must occasionally stop the world.</dd></div>
+            <div class="kv-row"><dt>steal time</dt><dd>CPU time spent by the hypervisor running other virtual machines — your thread is paused while it accrues.</dd></div>
+            <div class="kv-row"><dt>thrashing</dt><dd>The OS spending most of its time swapping pages in and out of memory, getting little actual work done. Why paging is often disabled on servers.</dd></div>
+            <div class="kv-row"><dt>hard real-time system</dt><dd>Must respond within a specified deadline or the system fails (aircraft, rockets, airbags). Requires an RTOS, worst-case execution time documentation, restricted allocation — expensive, and not “high-performance” in throughput terms.</dd></div>
+            <div class="kv-row"><dt>quorum / majority</dt><dd>Voting among nodes: decisions require a minimum number of votes. An absolute majority tolerates failures (3 nodes → 1, 5 nodes → 2) and is safe because there can be only one majority. Even “is this node dead?” is a majority decision.</dd></div>
+            <div class="kv-row"><dt>fencing token</dt><dd>A number that increases every time a lock is granted. The resource rejects writes with tokens older than the highest it has processed — so a paused node that wakes up believing it still holds the lease cannot cause damage.</dd></div>
+            <div class="kv-row"><dt>Byzantine fault</dt><dd>A node that “lies” — sends arbitrary faulty or corrupted responses. Nodes in this book are assumed unreliable but honest; Byzantine behavior needs BFT protocols with a supermajority (&gt;2/3) of correct nodes.</dd></div>
+            <div class="kv-row"><dt>Two Generals Problem</dt><dd>Two generals must agree on a battle plan via messengers who may be delayed or lost — like packets. The Byzantine Generals Problem adds traitors and unknown allegiances.</dd></div>
+            <div class="kv-row"><dt>system model</dt><dd>An abstraction describing what an algorithm may assume. Timing: synchronous (bounded), partially synchronous (mostly bounded, occasionally shattered), asynchronous (no clock at all). Failures: crash-stop, crash-recovery, Byzantine. Partially synchronous + crash-recovery is generally the most useful.</dd></div>
+            <div class="kv-row"><dt>safety property</dt><dd>“Nothing bad happens.” If violated, you can point at the moment it broke — and the damage cannot be undone. Must always hold, even if every node crashes.</dd></div>
+            <div class="kv-row"><dt>liveness property</dt><dd>“Something good eventually happens.” May not hold at a given moment, but there is always hope for the future. May carry caveats (majority alive, network eventually recovers). Eventual consistency is one.</dd></div>
+          </dl>
+
+          <h3>Further reading</h3>
+          <ul class="reading-list">
+            <li><strong>Peter Bailis and Kyle Kingsbury, “The Network Is Reliable”</strong><span class="src">ACM Queue, July 2014 — the evidence behind this chapter’s network pessimism</span></li>
+            <li><strong>Kyle Kingsbury, “Call Me Maybe” (Jepsen series) and “The Trouble with Timestamps”</strong><span class="src">aphyr.com, 2013–2014 — the epigraph author, demonstrating partition madness and clock skew against real databases</span></li>
+            <li><strong>James C. Corbett et al., “Spanner: Google’s Globally-Distributed Database”</strong><span class="src">OSDI, October 2012 — TrueTime, commit wait, and atomic clocks in every datacenter</span></li>
+            <li><strong>Leslie Lamport, “Time, Clocks, and the Ordering of Events in a Distributed System”</strong><span class="src">Communications of the ACM, July 1978 — the logical-clocks alternative to trusting quartz</span></li>
+            <li><strong>Leslie Lamport, Robert Shostak, and Marshall Pease, “The Byzantine Generals Problem”</strong><span class="src">ACM TOPLAS, July 1982 — consensus when some of the generals are traitors</span></li>
+            <li><strong>Cary G. Gray and David R. Cheriton, “Leases: An Efficient Fault-Tolerant Mechanism for Distributed File Cache Consistency”</strong><span class="src">SOSP, December 1989 — leases, and why expiry times are treacherous</span></li>
+            <li><strong>Cynthia Dwork, Nancy Lynch, and Larry Stockmeyer, “Consensus in the Presence of Partial Synchrony”</strong><span class="src">Journal of the ACM, April 1988 — where the partially synchronous model comes from</span></li>
+            <li><strong>Justin Sheehy, “There Is No Now: Problems With Simultaneity in Distributed Systems”</strong><span class="src">ACM Queue, March 2015 — clocks as confidence intervals, for the practical reader</span></li>
+          </ul>
+        </section>
+
+        <!-- ================= quiz ================= -->
+        <section class="quiz-wrap" id="quiz-section">
+          <div class="quiz-head">
+            <div>
+              <p class="kicker">Check yourself <span class="dim">· 13 questions</span></p>
+              <h2>Chapter 8 quiz</h2>
+              <p>Two written, eleven multiple-choice — networks, clocks, pauses, and the defenses against them.</p>
+            </div>
+            <span class="chip" id="quiz-last">no score yet</span>
+          </div>
+          <div id="quiz"></div>
+          <button class="mark-complete" id="mark-complete" type="button">Mark chapter complete</button>
+        </section>
+
+        <nav class="lesson-pager">
+          <a class="pager-link" href="chapter7.html">
+            <span class="dir">← Previous</span>
+            <span class="title">Transactions</span>
+          </a>
+          <a class="pager-link next" href="chapter9.html">
+            <span class="dir">Next chapter →</span>
+            <span class="title">Consistency and Consensus</span>
+          </a>
+        </nav>
+
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container foot-inner">
+      <p>DDIA practice companion · a fan-made study aid for<br>“Designing Data-Intensive Applications” by Martin Kleppmann (O’Reilly)</p>
+      <p>static site · no trackers · progress in localStorage</p>
+    </div>
+  </footer>
+
+  <script>
+    window.QUIZ = {
+      lesson: 'chapter8',
+      questions: [
+        {
+          q: 'Define partial failure, and explain why its nondeterminism makes distributed systems fundamentally harder than single-computer programming — including what a timeout can and cannot tell you. Then reveal.',
+          short: true,
+          answer: 'Partial failure: some parts of the system are broken in unpredictable ways while other parts work fine. On a single computer, hardware either works (the same operation always gives the same result — deterministic) or fails totally, by design — we prefer a complete crash to a wrong result. In a distributed system, an operation spanning multiple nodes may sometimes work and sometimes unpredictably fail — nondeterministic — and because message transit times are also nondeterministic, you may not even know whether something succeeded. A timeout tells you only that you haven’t received a response yet; it cannot tell you whether the request was lost, the node is dead or paused, or the response was lost or delayed — and the request may still be delivered even after you give up, which is why an action like sending an email can end up performed twice.'
+        },
+        {
+          q: 'A client acquires a lock with fencing token 33, then GC-pauses; its lease expires and client 2 acquires the lock with token 34 and writes successfully. Walk through what happens when client 1 wakes up and sends its write — and why the storage server, not the client, must do the checking. Then reveal.',
+          short: true,
+          answer: 'Client 1 resumes believing it still holds a valid lease — nothing told the thread it was paused, and it won’t notice the expiry until the next loop iteration. It sends its write stamped with token 33. The storage server remembers that it has already processed a write with token 34; since 33 is older, it rejects the write. The server must do the checking because the client cannot be trusted to know its own state: a paused client has no idea its lease expired, and a client checking only itself would happily proceed. Server-side checking also protects the service from misbehaving or abusive clients generally. If the resource doesn’t natively support fencing tokens, you can include the token in, say, the filename — some check is always necessary.'
+        },
+        {
+          q: 'Why is a supercomputer more like a single-node computer than a distributed system?',
+          options: [
+            'It has no network at all',
+            'It deals with partial failure by letting it escalate into total failure: if one node fails, the whole cluster workload is stopped, the node repaired, and the job restarted from the last checkpoint — like a kernel panic on one machine',
+            'It runs only deterministic algorithms',
+            'It is administered by a single organization'
+          ],
+          answer: 1,
+          why: 'Internet services can’t afford that model: they are online and must serve users at any time, run on commodity (higher-failure) hardware, use Clos-topology IP networks, assume something is always broken at scale, and are often geographically distributed over the slow, unreliable internet.'
+        },
+        {
+          q: 'What does TCP guarantee, and what does it not?',
+          options: [
+            'It guarantees your request was processed by the application, but not that it arrived',
+            'It guarantees packets arrive within a bounded time and in order',
+            'It retransmits lost packets, eliminates duplicates, and reassembles packets in order — but it cannot remove delays, cannot guarantee delivery, and an acknowledgment only means the receiver’s kernel got the bytes, not that the application processed them',
+            'It guarantees nothing at all; that is why everyone uses UDP'
+          ],
+          answer: 2,
+          why: 'TCP is a more reliable layer over unreliable IP — but the application behind it may be dead or paused even with a TCP ack, and network delays (including retransmission waits) remain fully visible. To know a request succeeded, you need a positive response from the application itself.'
+        },
+        {
+          q: 'You send a request and get no response. Why is it impossible to distinguish “the node is dead” from “the network is slow”?',
+          options: [
+            'Because dead nodes still send TCP resets',
+            'Because in an asynchronous network, the only information you have is that you haven’t received a response yet — the request may be lost, queued, or delivered late; the node may be crashed, paused, or busy; the response may be lost or delayed',
+            'Because routers refuse to report unreachable nodes',
+            'Because NTP hasn’t synchronized the clocks yet'
+          ],
+          answer: 1,
+          why: 'All six failure modes in Figure 8-1 are observationally identical. Even the sender can’t tell whether the packet was delivered — the only confirmation would be a response, which may itself be lost or delayed. Hence the timeout: a necessary, but entirely uninformative-about-why, tool.'
+        },
+        {
+          q: 'What is the danger of setting a timeout too short in a system under high load?',
+          options: [
+            'Nothing — short timeouts are always safer',
+            'The requests get duplicated automatically',
+            'You may prematurely declare merely-slow nodes dead, transfer their load to other nodes, and trigger a cascading failure where all nodes declare each other dead',
+            'The network hardware resets itself'
+          ],
+          answer: 2,
+          why: 'There is no guaranteed maximum delay (asynchronous networks have unbounded delays, and servers can’t promise maximum processing times), so a low timeout plus a transient spike in round-trip times can topple the system. Premature declarations also risk executing actions twice (e.g., an email sent by both the slow node and its replacement).'
+        },
+        {
+          q: 'Which clock should you use to measure a timeout duration, and why?',
+          options: [
+            'Time-of-day, because it is comparable across machines',
+            'Time-of-day, because it has better resolution',
+            'The monotonic clock: it is guaranteed to always move forward, while a time-of-day clock may jump backward on an NTP correction or ignore leap seconds. NTP may slew the monotonic clock’s rate (±0.05%) but can never jump it, and it assumes no cross-node synchronization',
+            'Either — they are interchangeable for durations'
+          ],
+          answer: 2,
+          why: 'The monotonic clock’s absolute value is meaningless (perhaps nanoseconds since boot) and must never be compared across machines — but for elapsed time within one node it is exactly right. Time-of-day clocks are for points in time: “when was this published,” “when does this expire.”'
+        },
+        {
+          q: 'In Figure 8-3, node 1 writes x = 1 at timestamp 42.004 s and node 3 writes x = 2 at 42.003 s, with skew under 3 ms. What happens on node 2, and why?',
+          options: [
+            'Node 2 keeps x = 2 because increments always win',
+            'Node 2 detects the clock skew and corrects it',
+            'Node 2 asks both nodes to resubmit their writes',
+            'Under last-write-wins, node 2 concludes x = 1 (42.004) is more recent and drops x = 2 (42.003) — client B’s causally-later increment is silently lost'
+          ],
+          answer: 3,
+          why: 'LWW compares time-of-day timestamps from different nodes, and a node with a lagging clock can’t overwrite values from a fast clock until the skew has elapsed — arbitrary amounts of data can be silently dropped. LWW also can’t distinguish sequential from concurrent writes (version vectors can) and same-timestamp ties need an arbitrary tiebreaker. Even good NTP can’t fix this: its accuracy is limited by network round-trip time.'
+        },
+        {
+          q: 'How does Spanner use TrueTime to implement snapshot isolation across datacenters?',
+          options: [
+            'It synchronizes all clocks to zero error using the internet',
+            'It timestamps transactions with the local clock’s raw reading and hopes for the best',
+            'TrueTime reports a confidence interval [earliest, latest]; if two transactions’ intervals don’t overlap, their order is certain. Spanner deliberately waits out the confidence interval before committing, and GPS receivers or atomic clocks in each datacenter keep the uncertainty to about 7 ms',
+            'It uses monotonic clocks shared across all datacenters'
+          ],
+          answer: 2,
+          why: 'Snapshot isolation needs monotonically increasing transaction IDs that reflect causality — hard to generate globally. Timestamps from synchronized clocks would work if you could trust them; TrueTime makes the uncertainty explicit (a range, not a point), and the commit wait keeps intervals from overlapping. These ideas haven’t reached mainstream databases outside Google.'
+        },
+        {
+          q: 'Why does the leader-with-a-lease code break during a long garbage collection pause?',
+          options: [
+            'The GC deletes the lease object from memory',
+            'The lease renews itself automatically, creating two leaders',
+            'The network switch drops all packets from a paused process',
+            'The code checks lease validity, then a pause (GC, VM suspension, paging…) outlives the lease before processing completes. On resumption, nothing tells the thread time has passed — it processes the request as leader even though the lease expired and another node has taken over'
+          ],
+          answer: 3,
+          why: 'Two separate problems: the expiry time is set by another machine (needs synchronized clocks), and — more fundamentally — the pause between checking and processing invalidates any buffer. A node must assume its execution can be paused at any point, even mid-function, while the rest of the world moves on and declares it dead.'
+        },
+        {
+          q: 'What is the difference between a crash fault and a Byzantine fault?',
+          options: [
+            'A crash fault is permanent; a Byzantine fault is temporary',
+            'A crash fault only affects the network; a Byzantine fault only affects disks',
+            'A Byzantine node “lies” — sends arbitrary faulty or corrupted responses — while nodes with crash faults are unreliable but honest: if they respond at all, they play by the rules. Byzantine fault tolerance needs a supermajority (>2/3) of correct nodes and is worth it mainly in aerospace (radiation) and multi-organization settings (blockchains)',
+            'They are the same thing with different names'
+          ],
+          answer: 2,
+          why: 'This book assumes non-Byzantine faults throughout. Notably: a software bug looks like a Byzantine fault, but with the same software on every node, BFT can’t save you — you’d need four independent implementations. And security compromises can’t be solved by protocol either; authentication, access control, encryption, and firewalls remain the real defenses.'
+        },
+        {
+          q: 'Which of these is a liveness property rather than a safety property?',
+          options: [
+            'Uniqueness of fencing tokens',
+            'Monotonic sequence of fencing tokens',
+            'Eventual consistency — “something good eventually happens,” it may not hold at a given moment, but there is always hope it will be satisfied in the future',
+            '“No two nodes are leader at the same time”'
+          ],
+          answer: 2,
+          why: 'The giveaway is the word “eventually.” Safety violations can be pinned to a point in time and can never be undone, so they must hold in all circumstances; liveness may carry caveats — a response comes only if a majority of nodes hasn’t crashed and the network eventually recovers.'
+        },
+        {
+          q: 'Which system model is generally the most useful for modeling real systems?',
+          options: [
+            'Synchronous timing with crash-stop faults',
+            'Asynchronous timing (no clocks at all) with Byzantine faults',
+            'Byzantine faults with synchronous timing',
+            'Partially synchronous timing with crash-recovery faults — mostly well-behaved delays that occasionally shatter, nodes that crash and may come back with their stable storage preserved but memory lost'
+          ],
+          answer: 3,
+          why: 'The synchronous model is unrealistic (unbounded delays and pauses do occur), the asynchronous model is too restrictive (no clocks, no timeouts), and Byzantine assumptions are overkill for single-organization datacenters. Correctness in a model means always satisfying your properties in every situation the model allows — with safety unconditional and liveness caveated.'
+        }
+      ]
+    };
+  </script>
+  <script src="../js/shared.js"></script>
+  <script src="../js/quiz.js"></script>
+  <script src="../js/toc.js"></script>
+</body>
+</html>

@@ -1,0 +1,933 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chapter 10 · Batch Processing — DDIA Practice</title>
+  <meta name="description" content="A comprehensive study guide to Chapter 10 of Designing Data-Intensive Applications: Unix pipes and the Unix philosophy, MapReduce and HDFS, mappers reducers and the shuffle, reduce-side and map-side joins, hot keys and skew, batch outputs from search indexes to Voldemort bulk loads, Hadoop vs MPP databases, dataflow engines like Spark Tez and Flink, and Pregel's bulk synchronous parallel graph processing.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d14'/%3E%3Cpath d='M16 6l9 10-9 10-9-10z' fill='%23f0b35c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Spline+Sans:wght@300..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
+  
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-active="lessons" class="is-lesson">
+
+  <div class="reading-progress" id="readingProgress" aria-hidden="true"></div>
+
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="../index.html">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <rect x="1" y="2" width="16" height="4" rx="1.5" stroke="#f0b35c" stroke-width="1.6"/>
+          <rect x="1" y="7" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+          <rect x="1" y="12" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+        </svg>
+        DDIA&nbsp;<span class="dim">/ practice</span>
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="../index.html" data-nav="home">Home</a>
+        <a href="../index.html#lessons" data-nav="lessons">Lessons</a>
+        <a href="../flashcards.html" data-nav="flashcards">Flashcards</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+
+    <div class="lesson-hero">
+      <span class="lesson-hero-num" aria-hidden="true">10</span>
+      <div class="container">
+        <a class="crumb" href="../index.html#lessons">← All chapters</a>
+        <p class="kicker">Chapter 10 <span class="dim">· Part III — Derived Data</span></p>
+        <h1>Batch Processing</h1>
+        <p class="lede">The oldest kind of computing, reborn at cluster scale: take everything you know, run a job over it, and leave behind a derived dataset someone else can use.</p>
+        <div class="lesson-meta">
+          <span class="chip">Unix pipes</span>
+          <span class="chip">MapReduce</span>
+          <span class="chip">Joins &amp; skew</span>
+          <span class="chip">Dataflow engines</span>
+          <span class="chip">Pregel</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pullquote container">
+      <p>“Raw data is better” — the sushi principle, and the founding idea of the data lake.</p>
+      <cite>— a maxim this chapter attributes to the practice of dumping data first and modeling it later</cite>
+    </div>
+
+    <div class="chapter-layout container">
+
+      <aside class="toc" aria-label="Chapter contents">
+        <p class="toc-title">Ch 10 contents</p>
+        <ul>
+          <li><a href="#s-intro">10.0 Three kinds of systems</a></li>
+          <li><a href="#s-types" class="sub">Online, batch, stream</a></li>
+          <li><a href="#s-history" class="sub">Old ideas, again</a></li>
+          <li><a href="#s-unix">10.1 Batch with Unix tools</a></li>
+          <li><a href="#s-loganalysis" class="sub">The log pipeline</a></li>
+          <li><a href="#s-chain" class="sub">Pipes vs custom code</a></li>
+          <li><a href="#s-sorting" class="sub">Sorting vs hash tables</a></li>
+          <li><a href="#s-philosophy" class="sub">The Unix philosophy</a></li>
+          <li><a href="#s-uniform" class="sub">A uniform interface</a></li>
+          <li><a href="#s-wiring" class="sub">Logic vs wiring</a></li>
+          <li><a href="#s-transparency" class="sub">Transparency &amp; experiments</a></li>
+          <li><a href="#s-mr">10.2 MapReduce &amp; HDFS</a></li>
+          <li><a href="#s-hdfs" class="sub">The distributed filesystem</a></li>
+          <li><a href="#s-jobexecution" class="sub">How a job runs</a></li>
+          <li><a href="#s-distributed" class="sub">Distributed execution</a></li>
+          <li><a href="#s-workflows" class="sub">Chaining jobs</a></li>
+          <li><a href="#s-reduceside" class="sub">Reduce-side joins</a></li>
+          <li><a href="#s-grouping" class="sub">Grouping &amp; sessionization</a></li>
+          <li><a href="#s-skew" class="sub">Hot keys &amp; skew</a></li>
+          <li><a href="#s-mapside" class="sub">Map-side joins</a></li>
+          <li><a href="#s-outputs" class="sub">What batch jobs output</a></li>
+          <li><a href="#s-hadoop-mpp" class="sub">Hadoop vs MPP databases</a></li>
+          <li><a href="#s-faults" class="sub">Designing for faults</a></li>
+          <li><a href="#s-beyond">10.3 Beyond MapReduce</a></li>
+          <li><a href="#s-materialization" class="sub">Materializing intermediates</a></li>
+          <li><a href="#s-dataflow" class="sub">Dataflow engines</a></li>
+          <li><a href="#s-df-fault" class="sub">Their fault tolerance</a></li>
+          <li><a href="#s-pregel" class="sub">Graphs: Pregel / BSP</a></li>
+          <li><a href="#s-highlevel" class="sub">High-level APIs</a></li>
+          <li><a href="#s-summary">10.4 Summary &amp; glossary</a></li>
+          <li><a href="#quiz-section">Quiz</a></li>
+        </ul>
+      </aside>
+
+      <div class="lesson-body">
+
+        <!-- ================= 10.0 ================= -->
+        <section class="block reveal" id="s-intro">
+          <p class="kicker">10.0 <span class="dim">·</span> The setup</p>
+          <h2>Three kinds of systems</h2>
+          <p>A batch processing system takes a large amount of input data, runs a job over it, and produces output data. To see what makes that category distinct, it helps to lay out the three broad kinds of data systems — the book’s taxonomy, worth memorizing because the rest of the book leans on it:</p>
+
+          <h3 id="s-types">10.0.1 — Online, offline, and near-real-time</h3>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Services (online) <span class="tag">latency</span></h4>
+              <p>Waits for a request or instruction from a client, handles it as quickly as possible, and sends a response. The primary performance measure is <strong>response time</strong>, and availability is often paramount — if the service is unreachable, the client gets an error. Everything from Chapter 1’s “responsive” quality goal to Part II’s replication and consensus machinery exists to serve this world.</p>
+            </div>
+            <div class="term">
+              <h4>Batch processing (offline) <span class="tag">throughput</span></h4>
+              <p>Takes a large, fixed input, runs a job that may last minutes to days, and writes output. Nobody is sitting waiting for it to finish. Jobs typically run on a schedule — say, once a day. The primary performance measure is <strong>throughput</strong>: time to crunch through a dataset of a given size. This chapter.</p>
+            </div>
+            <div class="term">
+              <h4>Stream processing (near-real-time) <span class="tag">in between</span></h4>
+              <p>Consumes and produces events shortly after they happen rather than responding to requests — lower latency than the equivalent batch job, but not interactive either. Also called nearline. Chapter 11.</p>
+            </div>
+          </div>
+
+          <h3 id="s-history">10.0.2 — Everything old is new again</h3>
+          <p>MapReduce — published by Google in 2004, and quickly hyped as the algorithm that made Google so massively scalable — has open-source descendants in Hadoop, CouchDB, and MongoDB. It was also, in truth, a fairly low-level step relative to the parallel processing systems that data warehouses had enjoyed for over a decade beforehand. Its importance has since declined, but it remains worth understanding, because the ideas underneath it have outlived the engine.</p>
+          <p>Batch processing itself is far older than MapReduce: punch-card tabulating machines — the Hollerith machines used in the <strong>1890 US Census</strong> — predate programmable digital computers entirely, and MapReduce’s sorted-records pipeline bears an uncanny resemblance to the electromechanical IBM card-sorting machines of the <strong>1940s and 1950s</strong>. History repeats. The plan: start with plain Unix tools on a single machine, because the ideas and lessons there carry over exactly to large-scale, heterogeneous distributed systems.</p>
+        </section>
+
+        <!-- ================= 10.1 ================= -->
+        <section class="block reveal" id="s-unix">
+          <p class="kicker">10.1 <span class="dim">·</span> The grandfather pipeline</p>
+          <h2>Batch processing with Unix tools</h2>
+          <p>A web server appends a line to a log file every time it serves a request. An nginx default-format line looks like this (it’s one line, folded here for readability):</p>
+          <div class="code-block">216.58.210.78 - - [27/Feb/2015:17:55:11 +0000] "GET /css/typography.css HTTP/1.1" 200 3377 "http://martin.kleppmann.com/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/40.0.2214.115 Safari/537.36"</div>
+          <p>Read the fields: February 27, 2015 at 17:55:11 UTC; a request for <code>/css/typography.css</code>; client IP 216.58.210.78; the user not authenticated; response status 200 (success); 3,377 bytes sent; Chrome 40 on macOS; referred from the author’s own site. The task: <strong>find the five most popular pages</strong>.</p>
+
+          <h3 id="s-loganalysis">10.1.1 — The log pipeline</h3>
+          <div class="code-block">cat /var/log/nginx/access.log |
+    awk '{print $7}' |
+    sort |
+    uniq -c |
+    sort -r -n |
+    head -n 5</div>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>cat — read the file</h4><p>Pour the log in. (Yes, awk could take the filename as an argument and skip cat — but the linear pipeline is more apparent written this way.)</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>awk '{print $7}' — extract the URL</h4><p>Split each line into whitespace-separated fields and print the seventh — the requested URL. Want to ignore CSS files instead? Change the argument to <code>$7 !~ /\.css$/ {print $7}</code>. Want top client IPs? <code>{print $1}</code>. One-word edits repurpose the whole pipeline.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>sort — order them</h4><p>Alphabetically sort the URLs. A URL requested n times now appears n times in a row — grouping by adjacency, not by lookup.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>uniq -c — count duplicates</h4><p><code>uniq</code> collapses repeated adjacent lines; with <code>-c</code> it prefixes each distinct URL with how many times it occurred.</p></div></div>
+            <div class="num-card"><span class="n">5.</span><div><h4>sort -r -n — rank</h4><p>Sort numerically (<code>-n</code>) by the count at the start of each line, reversed (<code>-r</code>) so the biggest number comes first.</p></div></div>
+            <div class="num-card"><span class="n">6.</span><div><h4>head -n 5 — take five</h4><p>Keep the first five lines, discard the rest. Output: the five most popular pages with their counts.</p></div></div>
+          </div>
+          <p>This pipeline chews through gigabytes of logs in seconds, and it’s representative: <code>awk</code>, <code>sed</code>, <code>grep</code>, <code>sort</code>, <code>uniq</code>, and <code>xargs</code> in combination can answer a surprising share of everyday data questions in minutes, and they perform remarkably well.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 10-A (recreated) · Six programs, one pipeline, no temp files</p>
+            <svg viewBox="0 0 780 240" role="img" aria-label="The Unix log-analysis pipeline: each program reads from stdin and writes to stdout, connected by in-memory pipes — cat feeds awk feeds sort feeds uniq -c feeds sort -r -n feeds head -n 5" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr10a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="10.5">
+                <rect x="14" y="60" width="88" height="46" rx="9" fill="#1a2133" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="58" y="80" text-anchor="middle" fill="#f0b35c">cat</text>
+                <text x="58" y="94" text-anchor="middle" fill="#636d83" font-size="8.5">the whole log</text>
+                <rect x="130" y="60" width="88" height="46" rx="9" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="174" y="80" text-anchor="middle" fill="#d9e0ee">awk</text>
+                <text x="174" y="94" text-anchor="middle" fill="#636d83" font-size="8.5">field 7 = URL</text>
+                <rect x="246" y="60" width="88" height="46" rx="9" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="290" y="80" text-anchor="middle" fill="#d9e0ee">sort</text>
+                <text x="290" y="94" text-anchor="middle" fill="#636d83" font-size="8.5">duplicates adjacent</text>
+                <rect x="362" y="60" width="88" height="46" rx="9" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="406" y="80" text-anchor="middle" fill="#d9e0ee">uniq -c</text>
+                <text x="406" y="94" text-anchor="middle" fill="#636d83" font-size="8.5">count each</text>
+                <rect x="478" y="60" width="88" height="46" rx="9" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="522" y="80" text-anchor="middle" fill="#d9e0ee">sort -r -n</text>
+                <text x="522" y="94" text-anchor="middle" fill="#636d83" font-size="8.5">biggest first</text>
+                <rect x="594" y="60" width="88" height="46" rx="9" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="638" y="80" text-anchor="middle" fill="#63dfc2">head -n 5</text>
+                <text x="638" y="94" text-anchor="middle" fill="#636d83" font-size="8.5">top five</text>
+                <line x1="102" y1="83" x2="128" y2="83" stroke="#63dfc2" stroke-width="1.6" marker-end="url(#arr10a)"/>
+                <line x1="218" y1="83" x2="244" y2="83" stroke="#63dfc2" stroke-width="1.6" marker-end="url(#arr10a)"/>
+                <line x1="334" y1="83" x2="360" y2="83" stroke="#63dfc2" stroke-width="1.6" marker-end="url(#arr10a)"/>
+                <line x1="450" y1="83" x2="476" y2="83" stroke="#63dfc2" stroke-width="1.6" marker-end="url(#arr10a)"/>
+                <line x1="566" y1="83" x2="592" y2="83" stroke="#63dfc2" stroke-width="1.6" marker-end="url(#arr10a)"/>
+                <text x="390" y="40" text-anchor="middle" fill="#8d97ad">each arrow is a pipe: an in-memory buffer — no intermediate files on disk</text>
+                <text x="390" y="150" text-anchor="middle" fill="#636d83">every program: reads stdin → writes stdout → knows nothing about its neighbors</text>
+                <rect x="90" y="168" width="600" height="40" rx="10" fill="rgba(99,223,194,0.06)" stroke="#2b3859"/>
+                <text x="390" y="186" text-anchor="middle" fill="#63dfc2">4189 /favicon.ico · 3631 /2013/05/24/…ssh-private-keys.html · …</text>
+                <text x="390" y="200" text-anchor="middle" fill="#636d83" font-size="9">the five most popular pages — gigabytes crunched in seconds</text>
+              </g>
+            </svg>
+            <p class="fig-caption">The whole chapter grows out of this picture: MapReduce is the same composition, industrialized across a cluster — and the biggest architectural difference, as we’ll see, is that MapReduce’s chained jobs <em>do</em> write intermediate files, more like a sequence of commands writing temp files than a true pipeline.</p>
+          </div>
+
+          <h3 id="s-chain">10.1.2 — Chain of commands versus a custom program</h3>
+          <p>The same job in Ruby is a hash table counting URLs, sorted descending, top five printed — a few lines, quite readable, and partly a matter of taste. The real difference shows on large files, and it’s about the <em>execution model</em>, not the syntax. Details below.</p>
+
+          <h3 id="s-sorting">10.1.3 — Sorting versus in-memory aggregation</h3>
+          <p>The Unix pipeline <strong>sorts</strong> a list in which each URL appears repeatedly; the Ruby script keeps an <strong>in-memory hash table</strong> mapping URL → count. The hash table’s footprint is the <strong>working set</strong> — the memory the job needs random access to — which depends only on the number of <em>distinct</em> URLs: a million hits on one URL still cost one hash entry. If the working set fits in memory, the hash approach is fine, even on a laptop.</p>
+          <p>Once the working set outgrows memory, <strong>sorting wins</strong>, because sorting can use disks efficiently — the same principle as Chapter 3’s SSTables and LSM-trees: sort chunks in memory, write them out as sorted segment files, and merge them; mergesort’s sequential access pattern is kind to disks. GNU coreutils’ <code>sort</code> does exactly this — spilling to disk automatically, even parallelizing across CPU cores. So the humble command chain scales to datasets far larger than memory without special effort; the bottleneck becomes the rate you can read the input from disk.</p>
+
+          <h3 id="s-philosophy">10.1.4 — The Unix philosophy</h3>
+          <p>Doug McIlroy — the inventor of pipes, which he first described back in 1964 — wanted programs to connect like garden hose: screw in another segment whenever data needs another massage. The plumbing metaphor stuck, and by 1978 the philosophy had crystallized into four principles:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Do one thing well</h4><p>Make each program do one thing well. To do a new job, build afresh rather than complicate old programs by adding new “features.”</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Expect composition</h4><p>Expect the output of every program to become the input to another, as yet unknown, program. Don’t clutter output with extraneous information; avoid rigidly columnar or binary formats; don’t insist on interactive input.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Build and try early</h4><p>Design and build software, even operating systems, to be tried early — ideally within weeks. Don’t hesitate to throw away the clumsy parts and rebuild.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>Prefer tools</h4><p>Use tools in preference to unskilled help, even if you must detour to build the tools — and expect to throw some of them out after you’re finished using them.</p></div></div>
+          </div>
+          <p>Read those again and notice what they sound like: automation, rapid prototyping, incremental iteration, friendliness to experimentation, big projects broken into manageable chunks. It’s a remarkably close match to today’s Agile and DevOps movements — <strong>surprisingly little has changed in four decades.</strong></p>
+
+          <h3 id="s-uniform">10.1.5 — A uniform interface</h3>
+          <p>If one program’s output is to become another’s input, they must agree on the data format — and if you want to connect <em>any</em> program to <em>any</em> program, they all need the same interface. Unix’s is the <strong>file</strong> (more precisely, the file descriptor): an ordered sequence of bytes. It is deliberately over-loaded — an actual file on disk, a communication channel to another process (stdin/stdout, a Unix socket), a device driver, a TCP connection can all be represented the same way, so wildly different things plug together.</p>
+          <p>By convention, most (not all) Unix programs treat those bytes as ASCII text, with the newline character (<code>\n</code>) as the record separator — our pipeline depended on awk, sort, uniq, and head all agreeing on that. The choice is arbitrary (the ASCII record separator 0x1E was arguably designed for the job), but the <em>agreement</em> is what enables interoperability. Parsing within a line is much vaguer — whitespace, tabs, CSV, pipe-separated all appear, and xargs alone has half a dozen options for how to parse its input. So it mostly works, and it isn’t exactly beautiful: <code>{print $7}</code> is not exactly <code>{print $request_url}</code>.</p>
+          <div class="callout note">
+            <p class="callout-title">Still remarkable, decades later</p>
+            <p>Not much software interoperates and composes as well as Unix tools do. You can’t pipe your email account and your shopping history through a custom analysis tool into a spreadsheet and post the results to a wiki. Even databases sharing the same data model rarely make it easy to move data from one into another — the lack of integration is what Balkanizes data. Uniform interfaces are rare and precious (URLs and HTTP, the foundations of the web, are another example — any site can link to any other, across organizational boundaries). Unix is the exception, not the norm.</p>
+          </div>
+
+          <h3 id="s-wiring">10.1.6 — Separation of logic and wiring</h3>
+          <p>The characteristic feature is <strong>stdin and stdout</strong>. Run a program without redirection and stdin comes from the keyboard, stdout goes to the screen — but files and pipes can be substituted freely. Pipes attach one process’s stdout to another’s stdin through a small in-memory buffer, without writing the intermediate data stream to disk. The design principle: a program <em>can</em> read and write files directly, but the approach works best when the program doesn’t worry about particular paths and just uses stdin/stdout — then <strong>the shell user, not the program, decides where input comes from and output goes.</strong> The program neither knows nor cares. Call it loose coupling, late binding, or inversion of control — separating the I/O wiring from the program logic is what makes composing small tools into big systems possible. Your own programs join the ecosystem simply by reading stdin and writing stdout: a translator for user-agent strings or IP-address-to-country codes plugs straight into the pipeline, and <code>sort</code> never knows the difference. The limits: multi-input/multi-output programs are awkward, you can’t pipe into a network connection without help (netcat, curl), and a program that opens its own files or sockets has wired up its own I/O, shrinking the shell’s freedom.</p>
+
+          <h3 id="s-transparency">10.1.7 — Transparency and experimentation</h3>
+          <p>The last Unix-philosophy advantage is observability, and it comes from three habits:</p>
+          <ul class="checklist">
+            <li><strong>Inputs are immutable</strong> — run the commands as often as you like, with whatever options you like, and the input files never change.</li>
+            <li><strong>End the pipeline anywhere</strong> — pipe the output into <code>less</code> and look at it: does it have the expected form? Great for debugging.</li>
+            <li><strong>Checkpoint stages to files</strong> — write one stage’s output to a file and feed the next stage from it, so you can restart the later stage without rerunning everything.</li>
+          </ul>
+          <p>Unix tools are blunt instruments next to a relational query optimizer — yet amazingly useful, especially for experimentation. Their one hard limitation: <strong>they run on a single machine.</strong> That’s where Hadoop comes in.</p>
+        </section>
+
+        <!-- ================= 10.2 ================= -->
+        <section class="block reveal" id="s-mr">
+          <p class="kicker">10.2 <span class="dim">·</span> The blunt instrument, distributed</p>
+          <h2>MapReduce and distributed filesystems</h2>
+          <p>MapReduce is like Unix tools but spread across potentially thousands of machines — equally blunt, brute-force, and surprisingly effective. A single MapReduce job is the analogue of a single Unix process: it takes one or more inputs and produces one or more outputs. It shares the virtues we just cataloged: running a job does not modify the input, it has no side effects beyond the output, and output files are written once sequentially, never modified after the fact. Where Unix tools use stdin/stdout, MapReduce jobs read and write files on a <strong>distributed filesystem</strong> — in Hadoop, HDFS.</p>
+
+          <h3 id="s-hdfs">10.2.1 — HDFS, the shared-nothing filesystem</h3>
+          <p>HDFS is an open-source reimplementation of the Google File System (GFS, published 2003); cousins include GlusterFS, the Quantcast File System, and object stores like Amazon S3, Azure Blob Storage, and OpenStack Swift. The architectural principle is <strong>shared-nothing</strong> — the opposite of the shared-disk NAS/SAN approach with its centralized storage appliance and special interconnects like Fibre Channel. A distributed filesystem needs no special hardware at all: just every machine in the datacenter and the disks already attached to each.</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>The daemon on every machine</h4><p>A daemon process on each node exposes a network service so other nodes can access the files stored on that machine — conceptually one big filesystem using every daemon-running machine’s disks.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>The NameNode</h4><p>A central server tracks which file blocks are stored on which machine — the filesystem’s directory brain.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Replication or erasure coding</h4><p>Blocks are made fault-tolerant by replication on multiple machines, or by erasure coding such as Reed–Solomon (recoverable with lower storage overhead than full copies) — RAID-like redundancy, but over a conventional datacenter network rather than special hardware.</p></div></div>
+          </div>
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-value">10,000s</span>
+              <span class="stat-label">Machines in the biggest HDFS deployments</span>
+              <span class="stat-note">combined storage capacity of hundreds of petabytes</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value teal">commodity</span>
+              <span class="stat-label">Hardware and open-source software</span>
+              <span class="stat-note">much cheaper than the equivalent dedicated storage appliance</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">locality</span>
+              <span class="stat-label">Compute can be scheduled onto the machine holding the data</span>
+              <span class="stat-note">object stores usually keep storage and computation separate; erasure coding breaks locality too</span>
+            </div>
+          </div>
+
+          <h3 id="s-jobexecution">10.2.2 — How a MapReduce job runs</h3>
+          <p>MapReduce is a programming framework for writing code that processes large datasets in a distributed filesystem. The pattern of data processing has four steps, and if it looks familiar, it should — it is the log-analysis pipeline again:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Break input into records</h4><p>Read the input files and split them into records — one log line each in the web server example, where <code>\n</code> was the separator. Handled by the input format parser, not by you.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Call the mapper per record</h4><p>The mapper extracts a key and value from each input record — our <code>awk '{print $7}'</code>, with the URL as key and the value empty. Called once per record; may emit any number of key-value pairs (including none); keeps no state between records.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Sort all the pairs by key</h4><p>The framework sorts — implicitly and always. Mapper output is handed to the reducer pre-sorted. This is the step you don’t write, and it’s the heart of the engine.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>Call the reducer per key</h4><p>Sorting has made all pairs with the same key adjacent, so the reducer — our <code>uniq -c</code> — gets each key with an iterator over its values and combines them without holding much in memory.</p></div></div>
+          </div>
+          <p>Steps 2 and 4 are where your custom code lives. In Hadoop, mapper and reducer are each a Java class implementing an interface; in MongoDB and CouchDB, they’re JavaScript functions (and you can even use standard Unix tools as mappers and reducers). If you need a second sorting stage — ranking URLs by count, like our <code>sort -r -n</code> — you write a second MapReduce job and chain them. Viewed this way, the <strong>mapper’s job is to prepare data for sorting, and the reducer’s job is to process sorted data.</strong></p>
+
+          <h3 id="s-distributed">10.2.3 — Distributed execution: the shuffle</h3>
+          <p>The key difference from Unix pipelines: MapReduce parallelizes across machines without you writing any parallelism code. Mappers and reducers each handle one record at a time and never need to know where their input comes from or output goes — the framework moves the data. The mechanics:</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 10-1 (recreated) · A MapReduce job: three mappers, three reducers</p>
+            <svg viewBox="0 0 780 430" role="img" aria-label="Input splits in HDFS feed map tasks that run near their data; each mapper writes sorted partitioned files which the reducers fetch over the network (the shuffle); reducers merge, process per key, and write output back to HDFS" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr10b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+                <marker id="arr10c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="10.5">
+                <rect x="20" y="90" width="110" height="34" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="75" y="104" text-anchor="middle" fill="#d9e0ee" font-size="9.5">split 1</text>
+                <text x="75" y="117" text-anchor="middle" fill="#636d83" font-size="8.5">HDFS block</text>
+                <rect x="20" y="160" width="110" height="34" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="75" y="174" text-anchor="middle" fill="#d9e0ee" font-size="9.5">split 2</text>
+                <text x="75" y="187" text-anchor="middle" fill="#636d83" font-size="8.5">HDFS block</text>
+                <rect x="20" y="230" width="110" height="34" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="75" y="244" text-anchor="middle" fill="#d9e0ee" font-size="9.5">split 3</text>
+                <text x="75" y="257" text-anchor="middle" fill="#636d83" font-size="8.5">HDFS block</text>
+                <text x="75" y="66" text-anchor="middle" fill="#8d97ad" font-size="10">INPUT (HDFS)</text>
+                <rect x="200" y="90" width="100" height="34" rx="8" fill="#1a2133" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="250" y="111" text-anchor="middle" fill="#f0b35c">mapper 1</text>
+                <rect x="200" y="160" width="100" height="34" rx="8" fill="#1a2133" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="250" y="181" text-anchor="middle" fill="#f0b35c">mapper 2</text>
+                <rect x="200" y="230" width="100" height="34" rx="8" fill="#1a2133" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="250" y="251" text-anchor="middle" fill="#f0b35c">mapper 3</text>
+                <line x1="130" y1="107" x2="198" y2="107" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr10b)"/>
+                <line x1="130" y1="177" x2="198" y2="177" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr10b)"/>
+                <line x1="130" y1="247" x2="198" y2="247" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr10b)"/>
+                <text x="164" y="84" text-anchor="middle" fill="#636d83" font-size="8.5">runs on a machine</text>
+                <text x="164" y="95" text-anchor="middle" fill="#636d83" font-size="8.5">storing the split</text>
+                <rect x="340" y="76" width="230" height="22" rx="6" fill="rgba(240,179,92,0.08)" stroke="#f0b35c" stroke-dasharray="4 3"/>
+                <text x="455" y="91" text-anchor="middle" fill="#f0b35c" font-size="9">each mapper writes sorted, hash-partitioned files to its local disk</text>
+                <rect x="360" y="140" width="190" height="74" rx="12" fill="#151c30" stroke="#2b3859" stroke-width="1.4"/>
+                <text x="455" y="130" text-anchor="middle" fill="#8d97ad" font-size="9.5">THE SHUFFLE</text>
+                <text x="455" y="166" text-anchor="middle" fill="#8d97ad" font-size="9">reducers fetch their partition</text>
+                <text x="455" y="180" text-anchor="middle" fill="#8d97ad" font-size="9">from every mapper over the network;</text>
+                <text x="455" y="194" text-anchor="middle" fill="#8d97ad" font-size="9">hash(key) mod R picks the reducer</text>
+                <text x="455" y="208" text-anchor="middle" fill="#636d83" font-size="9">(no randomness, despite the name)</text>
+                <line x1="300" y1="107" x2="384" y2="160" stroke="#f0b35c" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr10c)"/>
+                <line x1="300" y1="177" x2="384" y2="177" stroke="#f0b35c" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr10c)"/>
+                <line x1="300" y1="247" x2="384" y2="194" stroke="#f0b35c" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr10c)"/>
+                <rect x="620" y="90" width="110" height="34" rx="8" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="675" y="111" text-anchor="middle" fill="#63dfc2">reducer 1</text>
+                <rect x="620" y="160" width="110" height="34" rx="8" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="675" y="181" text-anchor="middle" fill="#63dfc2">reducer 2</text>
+                <rect x="620" y="230" width="110" height="34" rx="8" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="675" y="251" text-anchor="middle" fill="#63dfc2">reducer 3</text>
+                <line x1="550" y1="160" x2="618" y2="107" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr10b)"/>
+                <line x1="550" y1="177" x2="618" y2="177" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr10b)"/>
+                <line x1="550" y1="194" x2="618" y2="247" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr10b)"/>
+                <rect x="600" y="300" width="160" height="26" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="680" y="317" text-anchor="middle" fill="#d9e0ee" font-size="9.5">OUTPUT (HDFS)</text>
+                <line x1="675" y1="264" x2="675" y2="298" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr10b)"/>
+                <text x="60" y="317" fill="#8d97ad" font-size="9.5">merge sorted runs, group by key, run your reduce(),</text>
+                <text x="60" y="331" fill="#8d97ad" font-size="9.5">write one output file per reducer (replicated by HDFS)</text>
+                <text x="390" y="386" text-anchor="middle" fill="#636d83" font-size="9.5">#map tasks = number of input blocks · #reduce tasks = configured by you</text>
+                <text x="390" y="402" text-anchor="middle" fill="#636d83" font-size="9.5">“putting the computation near the data” — copy code to the machines, not data across the network</text>
+              </g>
+            </svg>
+            <p class="fig-caption">The full lifecycle: the scheduler tries to run each map task on a machine that stores a replica of its input file (assuming spare RAM and CPU), saving a network copy. Each map task partitions its output by reducer — hash of the key — and writes sorted files to its <em>local</em> disk (the same SSTable/LSM-tree technique from Chapter 3). When a mapper finishes, reducers connect to it and download the partition meant for them; each reduce task merges those files (preserving sort order, so same-key records from different mappers become adjacent) and streams your reducer one key at a time — the iterator may hold more data than memory. <strong>Partition-by-reducer + sort + copy is the shuffle</strong> — a misleadingly named step with no randomness in it.</p>
+          </div>
+
+          <h3 id="s-workflows">10.2.4 — Chaining jobs into workflows</h3>
+          <p>One job counts page views per URL, but finding the <em>most popular</em> URLs needs a second sort — so jobs get chained: the output of one becomes the input of the next. Hadoop MapReduce has no first-class workflow support: chaining is done implicitly by directory name — job 1 writes to a designated HDFS directory, job 2 is configured to read that same directory, and as far as the framework is concerned they are two independent jobs. Since a job’s output is only valid when the job has completed successfully (partial output of a failed job is discarded), the next job can only start after the previous one finishes.</p>
+          <p>This is where workflow schedulers earn their keep — <strong>Oozie, Azkaban, Luigi, Airflow, Pinball</strong> — managing the dependencies between job executions. And the scale is real:</p>
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-value">50–100</span>
+              <span class="stat-label">MapReduce jobs in a typical recommendation-system workflow</span>
+              <span class="stat-note">in a large organization, many teams run jobs that read each other’s output — tooling matters</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value teal">temp files</span>
+              <span class="stat-label">What chained jobs really resemble</span>
+              <span class="stat-note">less like Unix pipes (tiny in-memory buffer), more like a sequence of commands each writing to an intermediate file — with consequences, see 10.3.1</span>
+            </div>
+          </div>
+          <p>Higher-level tools — <strong>Pig, Hive, Cascading, Crunch, FlumeJava</strong> — assemble multi-stage workflows automatically, and we’ll return to them in 10.3.4.</p>
+
+          <h3 id="s-reduceside">10.2.5 — Reduce-side joins and grouping</h3>
+          <p>Joins were Chapter 2’s business from the data-model side; now we see how they’re actually executed at scale. Anywhere one record has an association with another — a foreign key, a document reference, an edge in a graph — code that needs both sides of the association needs a join, and denormalization can reduce the need but not remove it. The batch version of a join: <strong>resolve every occurrence of an association within the dataset, for all users at once</strong> — not a point lookup for one user, which is what indexes are for. And that’s the first big difference from a database: <strong>MapReduce has no concept of indexes</strong> — given a set of files, it reads all of them. A database would call that a full table scan; outrageous for a few records, entirely reasonable when the query aggregates over millions and can be parallelized across machines.</p>
+
+          <h4>The running example: activity events joined with user profiles</h4>
+          <p>On one side, the log of activity events (clickstream) — the fact table of a star schema from Chapter 3; on the other, the user database — one of its dimensions. The analytics task: correlate activity with profiles — which pages are popular with which age groups. The events carry only the user ID, not the profile (embedding the profile in every event would be wasteful), so the two datasets must be joined. The naive approach — iterate events, query the user database per user ID — is limited by round-trip time, hostage to cache effectiveness, and parallel queries can overwhelm the database. The batch approach: take a copy of the user database (an ETL extract from a backup, say), put it in the same distributed filesystem as the event log, and let MapReduce bring all relevant records together.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 10-3 (recreated) · A reduce-side sort-merge join on user ID</p>
+            <svg viewBox="0 0 780 440" role="img" aria-label="Mappers over the activity log emit (user ID, event) and mappers over the user database emit (user ID, date of birth); the shuffle brings all records with the same user ID to one reducer, with a secondary sort putting the profile record first" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr10d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+                <marker id="arr10e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="10">
+                <rect x="20" y="80" width="150" height="56" rx="10" fill="#1a2133" stroke="#2b3859"/>
+                <text x="95" y="102" text-anchor="middle" fill="#d9e0ee">ACTIVITY EVENTS</text>
+                <text x="95" y="118" text-anchor="middle" fill="#636d83" font-size="8.5">(user 123, viewed /p1)</text>
+                <text x="95" y="130" text-anchor="middle" fill="#636d83" font-size="8.5">(user 123, viewed /p2)…</text>
+                <rect x="20" y="200" width="150" height="56" rx="10" fill="#1a2133" stroke="#2b3859"/>
+                <text x="95" y="222" text-anchor="middle" fill="#d9e0ee">USER DATABASE</text>
+                <text x="95" y="238" text-anchor="middle" fill="#636d83" font-size="8.5">(user 123, born 1962)</text>
+                <text x="95" y="250" text-anchor="middle" fill="#636d83" font-size="8.5">(user 456, born 1987)…</text>
+                <rect x="240" y="80" width="120" height="56" rx="10" fill="#1a2133" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="300" y="104" text-anchor="middle" fill="#f0b35c">mappers</text>
+                <text x="300" y="120" text-anchor="middle" fill="#636d83" font-size="8.5">emit (key=user ID)</text>
+                <rect x="240" y="200" width="120" height="56" rx="10" fill="#1a2133" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="300" y="224" text-anchor="middle" fill="#f0b35c">mappers</text>
+                <text x="300" y="240" text-anchor="middle" fill="#636d83" font-size="8.5">emit (key=user ID)</text>
+                <line x1="170" y1="108" x2="238" y2="108" stroke="#f0b35c" stroke-width="1.5" marker-end="url(#arr10d)"/>
+                <line x1="170" y1="228" x2="238" y2="228" stroke="#f0b35c" stroke-width="1.5" marker-end="url(#arr10d)"/>
+                <rect x="420" y="130" width="160" height="76" rx="12" fill="#151c30" stroke="#2b3859" stroke-width="1.4"/>
+                <text x="500" y="120" text-anchor="middle" fill="#8d97ad">SHUFFLE + SORT by user ID</text>
+                <text x="500" y="158" text-anchor="middle" fill="#8d97ad" font-size="9">same-key records</text>
+                <text x="500" y="172" text-anchor="middle" fill="#8d97ad" font-size="9">become adjacent,</text>
+                <text x="500" y="186" text-anchor="middle" fill="#8d97ad" font-size="9">profile record first*</text>
+                <line x1="360" y1="108" x2="440" y2="150" stroke="#f0b35c" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr10d)"/>
+                <line x1="360" y1="228" x2="440" y2="186" stroke="#f0b35c" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr10d)"/>
+                <rect x="630" y="128" width="130" height="80" rx="10" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="695" y="152" text-anchor="middle" fill="#63dfc2">reducer</text>
+                <text x="695" y="168" text-anchor="middle" fill="#636d83" font-size="8.5">one call per user:</text>
+                <text x="695" y="182" text-anchor="middle" fill="#636d83" font-size="8.5">profile in a variable,</text>
+                <text x="695" y="196" text-anchor="middle" fill="#636d83" font-size="8.5">then stream events</text>
+                <line x1="580" y1="168" x2="628" y2="168" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr10e)"/>
+                <rect x="120" y="320" width="540" height="60" rx="10" fill="rgba(99,223,194,0.06)" stroke="#2b3859"/>
+                <text x="390" y="342" text-anchor="middle" fill="#63dfc2" font-size="9.5">output: (viewed-URL, viewer-age) pairs → later jobs compute per-URL age distributions</text>
+                <text x="390" y="360" text-anchor="middle" fill="#636d83" font-size="9">one user record in memory at a time · zero network requests · single-threaded, high-throughput code</text>
+                <text x="390" y="408" text-anchor="middle" fill="#636d83" font-size="9.5">*secondary sort — the framework sorts within a key so the profile record arrives before the events, in timestamp order</text>
+                <text x="390" y="424" text-anchor="middle" fill="#636d83" font-size="9.5">sort-merge join: mapper output sorted by key, reducers merge the sorted runs from both sides</text>
+              </g>
+            </svg>
+            <p class="fig-caption">The mapper’s key is the destination address: emit (user ID, event) from one side, (user ID, date of birth) from the other — and the shuffle delivers every record for a given user ID to one reducer call. MapReduce separates the <em>physical</em> communication (getting data to the right machine) from the <em>application logic</em> (what to do once it’s there), and because the framework handles retries, it also shields your code from worrying about other nodes’ partial failures. If both inputs are partitioned into many files, each side runs many mappers in parallel — the diagram compresses them.</p>
+          </div>
+
+          <h3 id="s-grouping">10.2.6 — Grouping and sessionization</h3>
+          <p>“Bring all records with the same key to one place” is bigger than joins — it’s also <strong>GROUP BY</strong>: set the mappers’ key to the grouping key and partitioning-and-sorting delivers each group to one reducer, which then aggregates — counting records (<code>COUNT(*)</code>), summing a field (<code>SUM(field)</code>), or picking the top k by some ranking. Grouping and joining look nearly identical when implemented on MapReduce.</p>
+          <p>A common special case is <strong>sessionization</strong>: collating all activity events for one user session to reconstruct the sequence of actions — the basis of A/B testing (do users shown the new site buy more?) and marketing-effect calculations. Events for one user are scattered across many web servers’ logs; a session cookie or user ID as the grouping key gathers each user’s events into one place while keeping different users apart.</p>
+
+          <h3 id="s-skew">10.2.7 — Handling skew: the celebrity problem</h3>
+          <p>The “bring everything with the same key together” pattern collapses when one key dominates. In a social network most users have a few hundred connections, but a few celebrities have millions of followers — disproportionately active records, known as <strong>linchpin objects</strong> or <strong>hot keys</strong>. One reducer gets the celebrity’s entire reply stream while others idle — and since a job is only complete when <em>all</em> its tasks complete, every downstream job waits for the slowest, most bloated reducer. That’s <strong>skew</strong> (hot spots, Chapter 6’s problem in batch clothing). The defenses:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Pig’s skewed join</h4><p>First a <em>sampling job</em> determines which keys are hot. In the real join, records for a hot key go to one of several reducers chosen <em>at random</em> (unlike the usual deterministic hash of the key), and the other join input is replicated to all the reducers handling that key. Work spread at the cost of duplication.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Crunch’s sharded join</h4><p>The same idea, but hot keys must be specified explicitly rather than sampled — very close to Chapter 6’s random-suffix trick for relieving hot spots in a partitioned database.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Hive’s skewed join</h4><p>Hot keys are declared in table metadata; records for those keys are stored in separate files and joined with a <em>map-side</em> join (below) instead.</p></div></div>
+            <div class="num-card"><span class="n">4.</span><div><h4>Two-stage aggregation</h4><p>For grouping over a hot key: stage 1 sends records to a <em>random</em> reducer, where each partially aggregates its subset into a compact intermediate; stage 2 combines those intermediates into the final value per key. The hot key’s load is split before the real aggregation.</p></div></div>
+          </div>
+
+          <h3 id="s-mapside">10.2.8 — Map-side joins</h3>
+          <p>Reduce-side joins make <strong>no assumptions about the input</strong> — whatever the properties and structure, the mappers can prepare it for joining. The price: all that sorting, copying to reducers, and merging is expensive, and depending on memory buffers the data may hit disk several times on its way through. If you <em>can</em> make assumptions about the inputs, joins get much cheaper: a cut-down job with <strong>no reducers and no sorting</strong>, where each mapper reads one input file block from the distributed filesystem and writes one output file. That’s all.</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Broadcast hash join <span class="tag">small + large</span></h4>
+              <p>The simplest and most common case: one input is small enough to load entirely into memory in each mapper. On startup, a mapper reads the small dataset — the user database, say — into an in-memory hash table, then streams the large input (the activity events) and looks up each user ID in the table. <em>Broadcast</em>: every mapper for a partition of the large input reads the entire small input, so it’s effectively sent to all of them; <em>hash</em>: the lookup structure. Supported as Pig’s “replicated join,” Hive’s MapJoin, and in Cascading, Crunch, and Impala. If the small input doesn’t fit memory, a read-only index on local disk gets random-access lookups nearly as fast via the OS page cache — without requiring the dataset to fit in RAM.</p>
+            </div>
+            <div class="term">
+              <h4>Partitioned hash join <span class="tag">same-way partitioned</span></h4>
+              <p>If the inputs are already partitioned the same way, the hash join runs per partition: activity events and user database each partitioned by, say, the last digit of the user ID; mapper 3 loads users with IDs ending in 3, scans only events for users with IDs ending in 3. Each mapper reads one partition from each input and its hash table is a fraction of the size. The constraint: both inputs must have the same number of partitions, keyed the same way with the same hash function — reasonable when prior MapReduce jobs produced them. Hive calls these <em>bucketed map joins</em>.</p>
+            </div>
+            <div class="term">
+              <h4>Map-side merge join <span class="tag">same-way sorted</span></h4>
+              <p>If the inputs are not only partitioned identically but <em>sorted</em> by the same key, memory size stops mattering: the mapper performs the merging a reducer would normally do, reading both inputs incrementally in ascending key order and matching equal keys. When this is possible, prior jobs probably produced the sorted, partitioned form — so the join could have been done in that prior job’s reduce stage, but running it as a separate map-only job makes sense when those datasets serve other purposes too.</p>
+            </div>
+          </div>
+
+          <div class="figure">
+            <p class="fig-head">Figure 10-4 (recreated) · Reduce-side vs broadcast map-side join</p>
+            <svg viewBox="0 0 780 430" role="img" aria-label="Top: reduce-side join shuffles both inputs by key, pays a full sort of everything. Bottom: broadcast map-side join loads the small input into every mapper's in-memory hash table and streams the large input — no shuffle, no sort" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr10f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+                <marker id="arr10g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="10">
+                <text x="30" y="34" fill="#ef8080" font-size="10.5">REDUCE-SIDE — general, expensive</text>
+                <rect x="30" y="52" width="120" height="34" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="90" y="66" text-anchor="middle" fill="#d9e0ee" font-size="9">large input</text>
+                <text x="90" y="78" text-anchor="middle" fill="#636d83" font-size="8.5">500 GB events</text>
+                <rect x="30" y="104" width="120" height="34" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="90" y="118" text-anchor="middle" fill="#d9e0ee" font-size="9">other input</text>
+                <text x="90" y="130" text-anchor="middle" fill="#636d83" font-size="8.5">any size</text>
+                <rect x="240" y="76" width="150" height="40" rx="9" fill="rgba(239,128,128,0.07)" stroke="#ef8080" stroke-dasharray="5 4"/>
+                <text x="315" y="94" text-anchor="middle" fill="#ef8080" font-size="9">shuffle BOTH inputs:</text>
+                <text x="315" y="106" text-anchor="middle" fill="#ef8080" font-size="9">sort, copy, merge everything</text>
+                <line x1="150" y1="69" x2="238" y2="88" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr10f)"/>
+                <line x1="150" y1="121" x2="238" y2="104" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr10f)"/>
+                <rect x="460" y="76" width="120" height="40" rx="9" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="520" y="94" text-anchor="middle" fill="#63dfc2" font-size="9">reducers</text>
+                <text x="520" y="106" text-anchor="middle" fill="#636d83" font-size="8.5">join per key</text>
+                <line x1="390" y1="96" x2="458" y2="96" stroke="#63dfc2" stroke-width="1.4" marker-end="url(#arr10g)"/>
+                <rect x="620" y="76" width="130" height="40" rx="9" fill="#1a2133" stroke="#2b3859"/>
+                <text x="685" y="94" text-anchor="middle" fill="#d9e0ee" font-size="9">output: joined</text>
+                <text x="685" y="106" text-anchor="middle" fill="#636d83" font-size="8.5">partitioned by key</text>
+                <line x1="580" y1="96" x2="618" y2="96" stroke="#63dfc2" stroke-width="1.4" marker-end="url(#arr10g)"/>
+                <text x="390" y="170" text-anchor="middle" fill="#636d83" font-size="9.5">no assumptions needed — but you pay for the sort with every byte of both sides</text>
+                <line x1="30" y1="196" x2="750" y2="196" stroke="#2b3859" stroke-width="1" stroke-dasharray="5 5"/>
+                <text x="30" y="232" fill="#63dfc2" font-size="10.5">MAP-SIDE (BROADCAST) — assumed, cheap</text>
+                <rect x="30" y="250" width="120" height="34" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="90" y="264" text-anchor="middle" fill="#d9e0ee" font-size="9">large input</text>
+                <text x="90" y="276" text-anchor="middle" fill="#636d83" font-size="8.5">500 GB events</text>
+                <rect x="30" y="302" width="120" height="34" rx="8" fill="#1a2133" stroke="#f0b35c"/>
+                <text x="90" y="316" text-anchor="middle" fill="#f0b35c" font-size="9">small input</text>
+                <text x="90" y="328" text-anchor="middle" fill="#636d83" font-size="8.5">10 MB dimension</text>
+                <rect x="300" y="246" width="180" height="96" rx="10" fill="rgba(99,223,194,0.06)" stroke="#63dfc2" stroke-width="1.2"/>
+                <text x="390" y="268" text-anchor="middle" fill="#63dfc2" font-size="9.5">MAPPER 1 · MAPPER 2 · …</text>
+                <text x="390" y="288" text-anchor="middle" fill="#8d97ad" font-size="9">each loads the WHOLE small</text>
+                <text x="390" y="302" text-anchor="middle" fill="#8d97ad" font-size="9">table into an in-memory</text>
+                <text x="390" y="316" text-anchor="middle" fill="#8d97ad" font-size="9">hash table — “broadcast” —</text>
+                <text x="390" y="330" text-anchor="middle" fill="#8d97ad" font-size="9">then streams its block</text>
+                <line x1="150" y1="267" x2="298" y2="278" stroke="#f0b35c" stroke-width="1.4" marker-end="url(#arr10f)"/>
+                <line x1="150" y1="319" x2="298" y2="312" stroke="#f0b35c" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arr10f)"/>
+                <rect x="560" y="272" width="190" height="40" rx="9" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="655" y="290" text-anchor="middle" fill="#63dfc2" font-size="9">no shuffle · no sort · no reducers</text>
+                <text x="655" y="302" text-anchor="middle" fill="#636d83" font-size="8.5">output partitioned like the large input</text>
+                <line x1="480" y1="294" x2="558" y2="294" stroke="#63dfc2" stroke-width="1.4" marker-end="url(#arr10g)"/>
+                <text x="390" y="378" text-anchor="middle" fill="#636d83" font-size="9.5">works only if one side fits in every mapper’s memory (or local-disk index + page cache)</text>
+                <text x="390" y="394" text-anchor="middle" fill="#636d83" font-size="9.5">map-side joins care about physical layout: partition counts, sort order — metadata kept in HCatalog / the Hive metastore</text>
+              </g>
+            </svg>
+            <p class="fig-caption">The trade in one picture: reduce-side pays a full shuffle of both inputs for total generality; broadcast map-side pays nothing per record, in exchange for the assumption that the small input fits in memory everywhere. Note the output difference: reduce-side output is partitioned and sorted by join key, map-side output inherits the large input’s partitioning — which is why knowing the physical layout of datasets (partitions, keys, sort order — tracked in HCatalog and the Hive metastore) becomes part of optimizing joins.</p>
+          </div>
+
+          <h3 id="s-outputs">10.2.9 — The output of batch workflows</h3>
+          <p>All these algorithms, one neglected question: <strong>what is the result of all that processing for?</strong> Batch processing isn’t transaction processing, and it isn’t really analytics either — closer to analytics (scans over large portions of input), but a MapReduce workflow is not an SQL query, and its output is usually not a report. What is it?</p>
+
+          <h4>Building search indexes</h4>
+          <p>Google’s original use of MapReduce was building search indexes — a workflow of <strong>5 to 10 MapReduce jobs</strong>. A full-text search index like Lucene’s is, in simplified form, a term dictionary: look up a keyword, get the postings list of document IDs containing it (real ones add ranking, misspelling handling, synonyms). For a fixed set of documents, batch processing is a very effective way to build one: mappers partition the documents, each reducer builds its partition’s index, index files go to the distributed filesystem — document-partitioned indexes (Chapter 6) parallelize beautifully. Queries are read-only, so the index files are immutable once created; when the document set changes, either rerun the whole indexing workflow periodically and swap in the new index wholesale (computationally wasteful for a few changed documents, but beautifully easy to reason about — documents in, indexes out), or build incrementally the Lucene way (new segment files, background merges). Even after Google moved on, Hadoop MapReduce remained a good way to build Lucene/Solr indexes.</p>
+
+          <h4>Key-value stores as batch output</h4>
+          <p>The other big category: machine learning systems — classifiers (spam filters, anomaly detection, image recognition) and recommenders (“people you may know,” related products) — whose output is usually <strong>a database</strong>: queried by user ID for suggested friends, by product ID for related products. That database serves a web application far from the Hadoop cluster. The obvious approach — write to the database server from mappers or reducers via the client library, one record at a time — <em>works</em>, and is a bad idea three ways:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Point writes are slow</h4><p>A network request per record is orders of magnitude below a batch task’s normal throughput — even with batching in the client library, performance suffers.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>It overwhelms the database</h4><p>MapReduce jobs run many tasks in parallel; if all the mappers or reducers write to one database at batch rates, they can swamp it and degrade its queries — dragging down other parts of the system with it.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>It breaks the all-or-nothing guarantee</h4><p>Normally a job’s result is as if every task ran exactly once, or nothing if the job failed. Writing to an external system from inside a job makes those side effects publicly visible — you inherit partially completed jobs, task retries, and speculative-execution complexities to clean up after.</p></div></div>
+          </div>
+          <p>The better approach: <strong>build a brand-new database inside the batch job</strong>, written as files to the job’s output directory in the distributed filesystem. The files are immutable once written, then bulk-loaded into read-only serving stores — Voldemort, Terrapin, ElephantDB, and HBase’s bulk load all support it. And MapReduce is well suited to it: extract a key, sort by it — much of building an index is already done. Because the stores are read-only (files written once by a batch job), the data structures are simple — no write-ahead log needed, for instance. The Voldemort loading pattern shows the payoff: the server keeps serving from the old files while the new ones copy across, then atomically switches — and if anything goes wrong, it switches back, because the old immutable files are still there.</p>
+
+          <h4>The philosophy of batch outputs</h4>
+          <p>Notice what Unix taught, restated at cluster scale. Treat inputs as immutable, replace any previous output completely, avoid side effects like writing to external databases — and you gain three big things. <strong>Human fault tolerance:</strong> deploy buggy code that corrupts the output, and rolling back the code and rerunning the job fixes the data again (or just switch back to yesterday’s output directory) — impossible with read-write transactions, where buggy writes are already baked in; the ease of recovery speeds up feature development, a minimization of irreversibility. <strong>Safe automatic retries:</strong> a failed map or reduce task is simply rescheduled on the same input — transient faults are tolerated, buggy code crashes identically and eventually fails the job — which is only safe because inputs are immutable and failed tasks’ outputs are discarded. <strong>Reusable outputs:</strong> the same files feed other jobs, including monitoring jobs that compare a run’s output with the previous one and measure discrepancies. Plus the same logic/wiring separation as Unix: one team builds a job that does one thing well; other teams decide where and when to run it. One difference from Unix: Hadoop replaces untyped text files with structured formats like Avro and Parquet, killing the low-value <code>{print $7}</code>-style syntactic parsing while keeping schema evolution (Chapter 4).</p>
+
+          <h3 id="s-hadoop-mpp">10.2.10 — Comparing Hadoop to distributed databases</h3>
+          <p>Zoom out: Hadoop is something like a distributed Unix — HDFS is the filesystem, MapReduce a quirky implementation of a Unix process that happens always to run <code>sort</code> between the map and reduce phases. When the MapReduce paper appeared, little in it was new: the processing and parallel join algorithms existed in MPP databases (the Gamma database machine, Teradata, Tandem NonStop SQL) more than a decade earlier. The biggest difference is philosophical: MPP databases are about <strong>parallel execution of analytic SQL queries</strong>; MapReduce plus a distributed filesystem is a <strong>general-purpose operating system that can run arbitrary programs</strong>.</p>
+
+          <h4>Diversity of storage</h4>
+          <p>Databases require data structured by a particular model (relational or document). Distributed filesystems store byte sequences — database records, sure, but equally text, images, video, sensor readings, sparse matrices, feature vectors, genome sequences. This inverts the warehouse discipline: <strong>dump data into HDFS indiscriminately first, figure out how to process it later</strong> — where an MPP database demands careful up-front modeling in its proprietary format before import. A purist prefers the modeling (better-quality data for users); in practice, making data available quickly — even raw, quirky, and difficult — often beats deciding the ideal model up front, because simply gathering an organization’s data in one place already enables joins across previously disparate datasets. That is the <strong>data lake</strong> (or enterprise data hub) idea, and it’s schema-on-read from Chapter 2 writ large: interpretation becomes the consumer’s problem, which suits producer/consumer teams with different priorities — there may be no single ideal model, just different views for different purposes. The slogan the chapter attaches to it: <strong>“raw data is better.”</strong> Hadoop also became the ETL workhorse: dump transactional data raw into HDFS, clean and transform it into relational form with MapReduce jobs, then import into an MPP warehouse — modeling still happens, just decoupled into a separate step.</p>
+
+          <h4>Diversity of processing models</h4>
+          <p>MPP databases are monolithic and tightly integrated — storage layout, query planning, scheduling, execution all tuned together for excellent SQL performance, and SQL’s declarative semantics serve analysts with graphical tools like Tableau. But not all processing is expressible as SQL: machine-learning and recommendation systems, full-text indexes with relevance ranking models, image analysis — feature engineering, natural-language models, fraud-risk estimators — <em>inevitably require code, not just queries</em>. That was MapReduce’s contribution: engineers running their own code over large datasets. Given HDFS plus MapReduce you can build a SQL engine on top (Hive did) — or any other processing model, and the openness of the platform meant many models flourished on one shared cluster, all reading the same files. No data movement between specialized systems; new processing models are easy to experiment with. The ecosystem agrees: HBase (random-access OLTP) and Impala (MPP-style analytics) both skip MapReduce entirely but share HDFS — very different approaches coexisting in one system.</p>
+
+          <h3 id="s-faults">10.2.11 — Designing for frequent faults</h3>
+          <p>Two more differences from MPP databases: how faults are handled, and how memory and disk are used. Batch jobs tolerate faults well — users aren’t waiting, and jobs can always be rerun. Most MPP databases abort the <em>entire query</em> if a node dies mid-execution (resubmit or rerun automatically) — acceptable for queries of seconds to minutes — and they prefer keeping data in memory (hash joins, for instance) to avoid disk reads. MapReduce instead retries at the granularity of an <em>individual task</em>, and is eager to write to disk — partly for fault tolerance, partly assuming datasets too big for memory anyway. The trade: per-task recovery overhead makes fault-free processing slower, but it wins for large jobs likely to experience at least one task failure — rerunning everything for one failed task would be wasteful.</p>
+          <p>But in most clusters, machine failures aren’t actually frequent — rare enough that most jobs never see one. Is the overhead worth it? Google’s answer explains the design, and it has nothing to do with unreliable hardware:</p>
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-value red">~5%</span>
+              <span class="stat-label">Risk that a one-hour MapReduce task is preempted at Google</span>
+              <span class="stat-note">to make room for a higher-priority process — more than an order of magnitude above the rate of actual hardware failures</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value red">&gt; 50%</span>
+              <span class="stat-label">Risk that at least one task is terminated in a 100-task job</span>
+              <span class="stat-note">each task running 10 minutes — preemption risk compounds across tasks</span>
+            </div>
+          </div>
+          <p>Google runs mixed-use datacenters: online production services and offline batch jobs share machines, every task has a container-enforced resource allocation (CPU, RAM, disk) and a priority, and a higher-priority task can <strong>preempt</strong> lower-priority ones to reclaim resources (with priority also driving pricing). That architecture lets non-production resources be <strong>overcommitted</strong> — better utilization and efficiency than segregating production and non-production — at the price that MapReduce jobs, running at low priority, effectively pick up the scraps under the table and can be killed at any moment. <strong>The freedom to arbitrarily terminate processes is worth more than the fault tolerance it costs.</strong> Among open-source schedulers, general priority preemption is (at the time of writing) missing from YARN, Mesos, and Kubernetes — YARN’s CapacityScheduler has preemption only for balancing queue allocations — and in environments where tasks are rarely terminated, MapReduce’s design decisions make much less sense. The next section is about the alternatives that chose differently.</p>
+        </section>
+
+        <!-- ================= 10.3 ================= -->
+        <section class="block reveal" id="s-beyond">
+          <p class="kicker">10.3 <span class="dim">·</span> Fixing the engine</p>
+          <h2>Beyond MapReduce</h2>
+          <p>MapReduce got enormous hype in the late 2000s, but it’s just one programming model among many — depending on data volume, structure, and processing type, other tools fit better. It remains worth learning as a clear, understandable abstraction over a distributed filesystem… in the sense of being easy to <em>understand</em>, not easy to <em>use</em>: implementing a complex job with the raw APIs is genuinely hard and laborious — you’d implement join algorithms from scratch. Higher-level models (Pig, Hive, Cascading, Crunch) help, but they don’t fix the execution model itself, which shows up as poor performance on some kinds of processing. On one hand MapReduce is astoundingly robust — arbitrarily large data, unreliable multi-tenant clusters, frequent task terminations, and it still finishes (slowly). On the other, other tools are sometimes <em>orders of magnitude</em> faster.</p>
+
+          <h3 id="s-materialization">10.3.1 — Materialization of intermediate state</h3>
+          <p>Every MapReduce job is independent; its only contact with the rest of the world is its input and output directories. Chain jobs by pointing job 2’s input at job 1’s output, and let an external scheduler start job 2 when job 1 finishes. That’s reasonable when the first job’s output is a dataset you want to publish widely — referred to by name, reused as input by other teams, loosely coupled just like Unix’s separation of logic and wiring. But in a 50–100 job recommendation workflow, much of what’s on disk is <strong>intermediate state</strong>: a means of passing data from one job to the next, nothing more. Writing that state out to files is <strong>materialization</strong> — eagerly computing a result and storing it rather than computing on demand (the same word as Chapter 3’s materialized views). Compared with Unix pipes, which stream through a small in-memory buffer, it has three costs:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Full-stage barriers</h4><p>A job can only start when <em>all</em> tasks of its input-producing predecessor finish — pipes start processes together and consume output as it’s produced. With skew and varying load, a job typically has a few straggler tasks far slower than the rest, and waiting for them drags the whole workflow.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Redundant mappers</h4><p>The mapper of a downstream job often just reads back the file the previous reducer wrote and re-prepares it for partitioning and sorting. The mapper code could usually have been folded into the previous reducer — reducers could be chained directly if their output were partitioned and sorted as mappers would have done.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Replicating scratch data</h4><p>Intermediate state in a distributed filesystem is replicated across several nodes — overkill for temporary data nobody else reads.</p></div></div>
+          </div>
+
+          <h3 id="s-dataflow">10.3.2 — Dataflow engines</h3>
+          <p>Several engines were built to fix these problems — <strong>Spark, Tez, and Flink</strong> — with one thing in common: <strong>they handle an entire workflow as one job</strong>, explicitly modeling the flow of data through several processing stages (hence <em>dataflow</em> engines; research ancestors: Dryad and Nephele). Like MapReduce, they repeatedly call user-defined functions, one record at a time on a single thread, parallelizing by partitioning inputs and copying output over the network. Unlike MapReduce, the functions need not alternate in strict map/reduce roles — they’re <strong>operators</strong>, assembled flexibly, with several ways to wire one operator’s output to another’s input:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Repartition + sort by key</h4><p>Exactly the MapReduce shuffle — enables sort-merge joins and grouping as before, but only where actually needed.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Repartition, skip the sort</h4><p>For partitioned hash joins: partitioning matters, order doesn’t — building a hash table randomizes the order anyway.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Broadcast</h4><p>One operator’s output sent to all partitions of the join operator — the broadcast hash join as a first-class wiring option.</p></div></div>
+          </div>
+
+          <div class="figure">
+            <p class="fig-head">Figure 10-5 (recreated) · MapReduce materialization vs a dataflow engine</p>
+            <svg viewBox="0 0 780 420" role="img" aria-label="Top: two chained MapReduce jobs each write their intermediate state to HDFS, replicated across nodes, with the next job waiting for the previous to fully finish. Bottom: a dataflow engine runs the same workflow as one job — operators pipeline data through in-memory or local-disk buffers and start as soon as input is ready" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr10h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+                <marker id="arr10i" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#ef8080"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="10">
+                <text x="30" y="34" fill="#ef8080" font-size="10.5">MAPREDUCE — every intermediate goes through HDFS</text>
+                <rect x="30" y="52" width="90" height="34" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="75" y="73" text-anchor="middle" fill="#d9e0ee" font-size="9">JOB 1</text>
+                <rect x="170" y="46" width="150" height="46" rx="9" fill="rgba(239,128,128,0.08)" stroke="#ef8080" stroke-dasharray="5 4"/>
+                <text x="245" y="65" text-anchor="middle" fill="#ef8080" font-size="9">intermediate state:</text>
+                <text x="245" y="79" text-anchor="middle" fill="#ef8080" font-size="9">written to HDFS, replicated</text>
+                <rect x="370" y="52" width="90" height="34" rx="8" fill="#1a2133" stroke="#2b3859"/>
+                <text x="415" y="73" text-anchor="middle" fill="#d9e0ee" font-size="9">JOB 2</text>
+                <rect x="510" y="46" width="150" height="46" rx="9" fill="rgba(239,128,128,0.08)" stroke="#ef8080" stroke-dasharray="5 4"/>
+                <text x="585" y="65" text-anchor="middle" fill="#ef8080" font-size="9">intermediate state:</text>
+                <text x="585" y="79" text-anchor="middle" fill="#ef8080" font-size="9">written to HDFS, replicated</text>
+                <rect x="710" y="52" width="40" height="34" rx="8" fill="#1a2133" stroke="#63dfc2"/>
+                <text x="730" y="73" text-anchor="middle" fill="#63dfc2" font-size="9">out</text>
+                <line x1="120" y1="69" x2="168" y2="69" stroke="#ef8080" stroke-width="1.5" marker-end="url(#arr10i)"/>
+                <line x1="320" y1="69" x2="368" y2="69" stroke="#ef8080" stroke-width="1.5" marker-end="url(#arr10i)"/>
+                <line x1="460" y1="69" x2="508" y2="69" stroke="#ef8080" stroke-width="1.5" marker-end="url(#arr10i)"/>
+                <line x1="660" y1="69" x2="708" y2="69" stroke="#ef8080" stroke-width="1.5" marker-end="url(#arr10i)"/>
+                <text x="390" y="118" text-anchor="middle" fill="#636d83" font-size="9.5">job 2 waits for job 1’s last straggler · job 2’s mappers often just re-read what job 1’s reducers wrote</text>
+                <line x1="30" y1="140" x2="750" y2="140" stroke="#2b3859" stroke-width="1" stroke-dasharray="5 5"/>
+                <text x="30" y="176" fill="#63dfc2" font-size="10.5">DATAFLOW ENGINE — one job, pipelined operators</text>
+                <rect x="30" y="194" width="100" height="34" rx="8" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="80" y="211" text-anchor="middle" fill="#63dfc2" font-size="9">operator</text>
+                <text x="80" y="222" text-anchor="middle" fill="#636d83" font-size="8">in-memory /</text>
+                <rect x="30" y="228" width="100" height="16" rx="6" fill="#1a2133" stroke="#2b3859"/>
+                <text x="80" y="240" text-anchor="middle" fill="#636d83" font-size="8">local disk buf</text>
+                <rect x="190" y="194" width="100" height="34" rx="8" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="240" y="211" text-anchor="middle" fill="#63dfc2" font-size="9">operator</text>
+                <text x="240" y="222" text-anchor="middle" fill="#636d83" font-size="8">only sort where</text>
+                <rect x="190" y="228" width="100" height="16" rx="6" fill="#1a2133" stroke="#2b3859"/>
+                <text x="240" y="240" text-anchor="middle" fill="#636d83" font-size="8">actually needed</text>
+                <rect x="350" y="194" width="100" height="34" rx="8" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="400" y="211" text-anchor="middle" fill="#63dfc2" font-size="9">operator</text>
+                <text x="400" y="222" text-anchor="middle" fill="#636d83" font-size="8">starts as soon</text>
+                <rect x="350" y="228" width="100" height="16" rx="6" fill="#1a2133" stroke="#2b3859"/>
+                <text x="400" y="240" text-anchor="middle" fill="#636d83" font-size="8">as input ready</text>
+                <rect x="510" y="194" width="100" height="34" rx="8" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="560" y="211" text-anchor="middle" fill="#63dfc2" font-size="9">operator</text>
+                <text x="560" y="222" text-anchor="middle" fill="#636d83" font-size="8">reuses JVM,</text>
+                <rect x="510" y="228" width="100" height="16" rx="6" fill="#1a2133" stroke="#2b3859"/>
+                <text x="560" y="240" text-anchor="middle" fill="#636d83" font-size="8">no new process</text>
+                <line x1="130" y1="211" x2="188" y2="211" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr10h)"/>
+                <line x1="290" y1="211" x2="348" y2="211" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr10h)"/>
+                <line x1="450" y1="211" x2="508" y2="211" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr10h)"/>
+                <rect x="660" y="194" width="90" height="34" rx="8" fill="#1a2133" stroke="#63dfc2"/>
+                <text x="705" y="211" text-anchor="middle" fill="#63dfc2" font-size="9">HDFS</text>
+                <text x="705" y="222" text-anchor="middle" fill="#636d83" font-size="8">final output</text>
+                <line x1="610" y1="211" x2="658" y2="211" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr10h)"/>
+                <text x="390" y="276" text-anchor="middle" fill="#636d83" font-size="9.5">inputs and final output are still HDFS — what disappears is the intermediate state on HDFS</text>
+                <text x="390" y="292" text-anchor="middle" fill="#636d83" font-size="9.5">Flink in particular pipelines: operators process incrementally, without waiting for complete input</text>
+                <rect x="60" y="318" width="660" height="72" rx="10" fill="rgba(99,223,194,0.05)" stroke="#2b3859"/>
+                <text x="390" y="340" text-anchor="middle" fill="#8d97ad" font-size="9.5">MapReduce is like writing each command’s output to a temporary file;</text>
+                <text x="390" y="356" text-anchor="middle" fill="#63dfc2" font-size="9.5">dataflow engines look much more like Unix pipes</text>
+                <text x="390" y="376" text-anchor="middle" fill="#636d83" font-size="9.5">same code runs on either engine — Pig/Hive/Cascading switch to Tez or Spark by configuration alone</text>
+              </g>
+            </svg>
+            <p class="fig-caption">The advantages, collected: (1) expensive sorting only where it’s actually required, not by default between every map and reduce; (2) no pointless map tasks — a mapper doesn’t change partitioning, so its work can fold into the preceding reduce operator; (3) with all data dependencies declared, the scheduler sees the whole graph and can co-locate producers and consumers, exchanging data through shared memory buffers instead of the network; (4) intermediate state lives in memory or local disk rather than replicated HDFS files; (5) operators start the moment their input is ready — no waiting for the previous stage to fully finish; (6) operators reuse existing JVM processes instead of starting a new one per task.</p>
+          </div>
+          <p>In practice these engines run the same computations as MapReduce workflows, usually significantly faster, and because operators generalize map and reduce, the same processing code runs on either — Pig, Hive, and Cascading workflows move from MapReduce to Tez or Spark with a configuration change, no code modification. (Internal differences: Tez is a fairly thin library leaning on YARN’s shuffle service for moving data; Spark and Flink are big frameworks with their own network layers, schedulers, and user-facing APIs.) One unavoidable limit on pipelining: <strong>a sort must consume its entire input before emitting anything</strong> — the very last record might carry the lowest key and need to be first out — so any operator that sorts accumulates state, at least temporarily. But most of a workflow pipelines just fine; and when the job completes, its output still goes to durable storage — usually the distributed filesystem — so the improvement over MapReduce is precisely that you skip writing the <em>intermediate</em> state to it.</p>
+
+          <h3 id="s-df-fault">10.3.3 — Fault tolerance in dataflow engines</h3>
+          <p>MapReduce’s full materialization makes fault tolerance easy: a failed task restarts on another machine and rereads the same input from the filesystem. Spark, Tez, and Flink skip that, so they recover differently: if a machine dies and its intermediate state is lost, <strong>recompute it</strong> from whatever is still available — a prior intermediate stage if possible, otherwise the original HDFS input. The framework therefore tracks the <strong>ancestry</strong> of every piece of data: which input partitions and which operators produced it. Spark does this with the <strong>resilient distributed dataset (RDD)</strong> abstraction; Flink checkpoints operator state so a faulted operator can resume. One wrinkle: <strong>determinism</strong>. If lost data was already sent downstream and the recomputed version differs (nondeterministic operators — hash-table iteration order, random numbers, clock or external-data reads), downstream operators can’t reconcile the contradiction — the usual fix is killing and rerunning them on the new data. Cascading faults are avoided by making operators deterministic (fixed seeds for pseudorandomness, and so on). And recomputation isn’t always right: when intermediate data is much smaller than the source, or the computation is CPU-heavy, materializing the intermediate to files is cheaper than recomputing.</p>
+
+          <h3 id="s-pregel">10.3.4 — Graphs and iterative processing: Pregel</h3>
+          <p>Chapter 2 met graphs as data models with OLTP-style traversal queries — find a few vertices matching some criteria. Batch processing has a different graph question: offline analysis or processing of an <em>entire</em> graph — machine learning (recommendation engines), ranking systems, and the most famous of them all, <strong>PageRank</strong>, which estimates a web page’s popularity from what links to it and feeds the ordering of search results.</p>
+          <p>First, an important disentangling: dataflow engines arrange a job’s <em>operators</em> as a directed acyclic graph — that is <strong>not</strong> graph processing. In dataflow, the flow of data is graph-shaped while the data itself is relational-style tuples; in graph processing, <strong>the data itself is the graph</strong>. Another unfortunate naming collision.</p>
+          <p>Graph algorithms usually work by traversing one edge at a time — joining a vertex with an adjacent vertex to propagate information, repeating until some condition holds (no more edges to follow, or a metric converges — the locations-in-North-America example from Chapter 2 was a <strong>transitive closure</strong> computed exactly this way). You can store the graph in the distributed filesystem as files of vertices and edges, but “repeat until done” cannot be expressed in plain MapReduce, which makes exactly one pass. The workaround: an external scheduler runs a batch job per iteration, checks the completion condition when it finishes, and loops. Inefficient — MapReduce re-reads the entire input and produces an entirely new output dataset even when only a small part of the graph changed since the last iteration.</p>
+
+          <h4>The bulk synchronous parallel model</h4>
+          <p>The fix that became popular for batch graph processing is the <strong>bulk synchronous parallel (BSP)</strong> model of computation, widely known by the name of the Google paper that popularized it: <strong>Pregel</strong>. Open-source implementations include Apache Giraph, Spark’s GraphX API, and Flink’s Gelly API. The idea echoes MapReduce’s key-as-address trick: where a mapper “sends a message” to a particular call of the reducer by choosing the key, in Pregel <strong>one vertex sends a message to another vertex</strong> — typically along an edge. Each iteration (a <strong>superstep</strong>) calls a function for each vertex, handing it all the messages sent to it — much like a reducer call. The difference from MapReduce: <strong>a vertex remembers its state in memory from one iteration to the next</strong>, so each superstep only processes new incoming messages. If no messages are sent to some part of the graph, no work happens there.</p>
+          <div class="figure">
+            <p class="fig-head">Figure 10-6 (recreated) · One Pregel superstep</p>
+            <svg viewBox="0 0 780 300" role="img" aria-label="During superstep k, each vertex processes the messages delivered from superstep k-1, updates its in-memory state, and sends messages that will be delivered at superstep k+1 — the barrier between supersteps guarantees all messages of a round arrive before the next round begins" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr10j" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+                <marker id="arr10k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="10">
+                <rect x="60" y="60" width="660" height="180" rx="14" fill="#151c30" stroke="#2b3859" stroke-width="1.4"/>
+                <text x="390" y="46" text-anchor="middle" fill="#8d97ad">SUPERSTEP k — “think like a vertex”</text>
+                <circle cx="170" cy="130" r="24" fill="rgba(240,179,92,0.14)" stroke="#f0b35c" stroke-width="1.5"/>
+                <text x="170" y="134" text-anchor="middle" fill="#f0b35c">A</text>
+                <circle cx="390" cy="110" r="24" fill="rgba(99,223,194,0.12)" stroke="#63dfc2" stroke-width="1.5"/>
+                <text x="390" y="114" text-anchor="middle" fill="#63dfc2">B</text>
+                <circle cx="610" cy="150" r="24" fill="#1a2133" stroke="#8d97ad" stroke-width="1.5"/>
+                <text x="610" y="154" text-anchor="middle" fill="#8d97ad">C</text>
+                <line x1="194" y1="126" x2="364" y2="112" stroke="#2b3859" stroke-width="1.6" marker-end="url(#arr10k)"/>
+                <line x1="414" y1="126" x2="584" y2="146" stroke="#2b3859" stroke-width="1.6" marker-end="url(#arr10k)"/>
+                <rect x="70" y="176" width="200" height="44" rx="8" fill="rgba(240,179,92,0.08)" stroke="#f0b35c" stroke-dasharray="5 4"/>
+                <text x="170" y="192" text-anchor="middle" fill="#f0b35c" font-size="9">messages from superstep k−1</text>
+                <text x="170" y="206" text-anchor="middle" fill="#8d97ad" font-size="9">+ state kept in memory → update</text>
+                <rect x="500" y="70" width="210" height="44" rx="8" fill="rgba(99,223,194,0.07)" stroke="#63dfc2" stroke-dasharray="5 4"/>
+                <text x="605" y="86" text-anchor="middle" fill="#63dfc2" font-size="9">send messages — delivered in</text>
+                <text x="605" y="100" text-anchor="middle" fill="#8d97ad" font-size="9">superstep k+1 (exactly once)</text>
+                <line x1="500" y1="112" x2="428" y2="128" stroke="#63dfc2" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#arr10k)"/>
+                <text x="390" y="276" text-anchor="middle" fill="#8d97ad" font-size="9.5">barrier: all of superstep k’s messages are copied over the network before k+1 starts</text>
+                <text x="390" y="292" text-anchor="middle" fill="#636d83" font-size="9.5">vertices are like actors — except state and messages are fault-tolerant, and delivery comes in fixed rounds</text>
+              </g>
+            </svg>
+            <p class="fig-caption">A superstep in one picture. Vertex state persists in memory across supersteps; messages sent in one round are delivered in the next, exactly once, even over a lossy network. Fault tolerance comes from periodically checkpointing every vertex’s state at the end of a superstep — a node loses its in-memory state, and the simplest recovery rolls the whole computation back to the last checkpoint (with deterministic algorithms and logged messages, selective recovery of just the lost partition is possible). The framework partitions the graph and routes messages by vertex ID — the vertex never learns which machine it runs on. Optimal partitioning (co-locating chatty vertices) is hard; in practice, partitioning is often just by arbitrarily assigned vertex ID, so graph algorithms carry heavy cross-machine communication — the intermediate messages can be larger than the graph itself, and the network overhead can dominate. Which suggests a threshold: if the graph fits in one machine’s memory — or even on its disks (single-machine frameworks like GraphChi) — a single-machine, maybe single-threaded, algorithm will likely <em>outperform</em> the distributed version. Only graphs too big for one machine force the distributed route, and efficient parallel graph processing remains open research.</p>
+          </div>
+
+          <h3 id="s-highlevel">10.3.5 — High-level APIs and declarative languages</h3>
+          <p>As the engines matured — clusters over <strong>10,000 machines</strong> processing many petabytes — the problem of physically operating batch jobs at scale was considered more or less solved, and attention shifted to the programming model, processing efficiency, and broadening the problems these tools can solve. Hive, Pig, Cascading, and Crunch arose precisely because hand-written MapReduce is laborious; as Tez emerged, these languages gained the side benefit of moving to the new engine without rewriting job code, and Spark and Flink ship their own high-level dataflow APIs (inspired by FlumeJava).</p>
+          <p>These APIs use <strong>relational-style building blocks</strong> — join datasets on a field, group tuples by key, filter, aggregate by count or sum — implemented internally by the join and grouping algorithms from this chapter. Beyond needing less code, the high-level interfaces enable <strong>interactive use</strong>: write analysis code incrementally in a shell, run it frequently, watch what it does — echoing the Unix philosophy’s experimentation loop — and they improve execution efficiency at the machine level, too.</p>
+          <p>How so? Because <strong>declaring joins relationally lets the framework choose the algorithm.</strong> Hive, Spark, and Flink have cost-based query optimizers that analyze the join inputs’ properties, pick the most suitable join algorithm, and even reorder joins to minimize intermediate state — and the choice of join algorithm can make a big difference to a batch job’s performance. It’s Chapter 2’s lesson again: say <em>what</em>, not <em>how</em>, and the optimizer figures out how — so you don’t have to remember everything this chapter taught you. MapReduce and successors differ from fully declarative SQL in a crucial way, though: they’re built around callbacks — a user function free to call arbitrary code over each record — which is what lets batch systems draw on the huge ecosystems of existing libraries for parsing, natural-language analysis, image analysis, and numerical algorithms. Databases have user-defined functions, but they’re cumbersome and poorly integrated with the package managers programmers actually use (Maven, npm, Rubygems). Declarative features creep in from other directions too: a callback that is just a simple filter or field selection can be compiled instead of called — Spark generates JVM bytecode, Impala uses LLVM native code — enabling vectorized execution (Chapter 3) and column layouts that read only required fields. The convergence this drives is worth savoring: <strong>batch frameworks with built-in operators and declarative optimizers begin to look like MPP databases with comparable performance, while keeping the freedom to run arbitrary code on arbitrary data.</strong> And standard processing patterns keep reappearing — reusable libraries emerged: Mahout (machine learning on MapReduce, Spark, Flink) and MADlib (inside an MPP database, Apache HAWQ) for statistical algorithms; k-nearest-neighbor style similarity search; approximate string matching for genome analysis. In the end they are all just systems for storing and processing data.</p>
+        </section>
+
+        <!-- ================= 10.4 ================= -->
+        <section class="block reveal" id="s-summary">
+          <p class="kicker">10.4 <span class="dim">·</span> Pulling it together</p>
+          <h2>Summary</h2>
+          <p>The chapter traced one design philosophy from <code>awk</code> to Spark: <strong>inputs are immutable, outputs are meant to become the input to another (as yet unknown) program, and complex problems are solved by composing small tools that do one thing well.</strong> The uniform interface that makes composition possible is files and pipes in Unix, a distributed filesystem in MapReduce, and dataflow engines add pipe-like transports for intermediates — while the initial input and final output of a job are still HDFS.</p>
+          <p>Distributed batch frameworks solve two hard problems. <strong>Partitioning:</strong> mappers partition by input file blocks, then repartition, sort, and merge into a configurable number of reducer partitions — all to bring related data (the same keys) to the same place; dataflow engines avoid sorting unless required but partition similarly. <strong>Fault tolerance:</strong> MapReduce’s frequent disk writes make single-task recovery easy but slow the failure-free case; dataflow engines materialize less, keep more in memory, and must recompute more when a node fails — and deterministic operators shrink the recomputation. Join algorithms, one line each: <em>sort-merge</em> — both inputs through key-extracting mappers, partition-sort-merge delivers same-key records to one reducer call; <em>broadcast hash</em> — one input small enough to load entirely into every mapper’s hash table while the large input streams; <em>partitioned hash</em> — both inputs partitioned identically, hash join per partition.</p>
+          <p>The programming model is deliberately restricted — callbacks assumed stateless with no side effects beyond their designated output — and that restriction is precisely what lets the framework hide the hard distributed-systems problems: tasks retry safely, failed tasks’ output is discarded, several attempts of one partition may succeed but only one’s output becomes visible, and the final result is <strong>as if no faults occurred at all</strong> — stronger semantics than most online services offer. And the defining characteristic of batch processing: it reads input, produces output, and doesn’t modify the input — the output is <em>derived</em>. Crucially, the input is <strong>bounded</strong>: known, fixed size (log files at a point in time, a database snapshot), so a job knows when it has read everything, and eventually finishes. In the next chapter the input becomes unbounded — never-ending streams — and a job is never complete, because at any time more work may arrive. Stream and batch processing rhyme, but that one assumption changes everything about how the systems are built.</p>
+
+          <h3>Glossary</h3>
+          <dl class="kv">
+            <div class="kv-row"><dt>batch processing</dt><dd>Offline jobs that take a large fixed input, run minutes to days, and produce output — nobody waiting. Scheduled periodically; measured by throughput, not response time.</dd></div>
+            <div class="kv-row"><dt>Unix pipe</dt><dd>Connects one process’s stdout to another’s stdin through a small in-memory buffer — no intermediate files. The composition mechanism the entire chapter is named after.</dd></div>
+            <div class="kv-row"><dt>uniform interface</dt><dd>Every program using the same I/O interface (in Unix: the file — an ordered byte sequence), so any output feeds any input. Rare and precious; URLs/HTTP are another example.</dd></div>
+            <div class="kv-row"><dt>stdin / stdout</dt><dd>The conventions separating logic from wiring: programs read standard input and write standard output without knowing where either is attached — the shell decides.</dd></div>
+            <div class="kv-row"><dt>working set</dt><dd>The memory a job needs random access to — for URL counting, only the distinct URLs, not the log size. Fits in memory → hash table; larger → sorting, which uses disks efficiently (sequential mergesort runs, SSTable-style).</dd></div>
+            <div class="kv-row"><dt>MapReduce</dt><dd>Framework for processing large datasets on a distributed filesystem: mapper called per input record (emits key-value pairs), framework sorts by key, reducer called per key over all its values. One job = one Unix process, industrialized.</dd></div>
+            <div class="kv-row"><dt>mapper</dt><dd>Called once per input record; extracts key and value; may emit any number of pairs (or none); stateless between records. Its job: put data into a form suitable for sorting.</dd></div>
+            <div class="kv-row"><dt>reducer</dt><dd>Called with one key and an iterator over all its values (possibly more than memory); may emit any number of output records. Its job: process what sorting grouped.</dd></div>
+            <div class="kv-row"><dt>shuffle</dt><dd>Partition mapper output by reducer (hash of key), sort, and copy each partition from mappers to reducers over the network. No randomness — unlike a deck of cards. MapReduce’s heart.</dd></div>
+            <div class="kv-row"><dt>HDFS</dt><dd>Hadoop Distributed File System — open-source GFS reimplementation. Shared-nothing: a daemon per machine plus a central NameNode tracking which blocks live where; fault tolerance by replication or erasure coding (Reed–Solomon). Biggest deployments: tens of thousands of machines, hundreds of petabytes.</dd></div>
+            <div class="kv-row"><dt>NameNode</dt><dd>HDFS’s central server that records which file blocks are stored on which machine — the filesystem’s directory brain.</dd></div>
+            <div class="kv-row"><dt>speculative execution</dt><dd>Running backup copies of slow (straggler) tasks and taking the first successful result — one reason side-effect-free batch code is essential.</dd></div>
+            <div class="kv-row"><dt>putting computation near the data</dt><dd>Scheduling each map task on a machine storing a replica of its input file, when spare RAM and CPU allow — copy the code, not the data.</dd></div>
+            <div class="kv-row"><dt>secondary sort</dt><dd>Arranging reducer input so that within each key, records arrive in a chosen order — the user profile record before that user’s events, events in timestamp order.</dd></div>
+            <div class="kv-row"><dt>reduce-side (sort-merge) join</dt><dd>Mappers on both inputs emit (join key, record); partition-sort-merge brings all same-key records to one reducer call. No assumptions about inputs; pays a full shuffle of both sides. Output partitioned and sorted by key.</dd></div>
+            <div class="kv-row"><dt>broadcast hash join</dt><dd>Map-side join for a large input plus a small one that fits in every mapper’s memory: load the small side into an in-memory hash table, stream the large side, look up each record. No shuffle, no reducers. Hive “MapJoin,” Pig “replicated join.”</dd></div>
+            <div class="kv-row"><dt>partitioned hash join</dt><dd>Map-side join when both inputs are partitioned identically (same key, same hash function, same partition count): each mapper hash-joins just its partition. Hive “bucketed map join.”</dd></div>
+            <div class="kv-row"><dt>map-side merge join</dt><dd>When inputs are identically partitioned <em>and</em> sorted by the same key, mappers merge directly — like a reducer without the shuffle; size doesn’t matter.</dd></div>
+            <div class="kv-row"><dt>hot key (linchpin object)</dt><dd>A disproportionately active record — the celebrity with millions of followers — that floods one reducer with skew while others idle, stalling every downstream job.</dd></div>
+            <div class="kv-row"><dt>skew handling</dt><dd>Pig’s skewed join (sampling finds hot keys, then random reducer choice plus replicating the other input), Crunch’s sharded join (hot keys declared explicitly), Hive’s skewed join optimization (hot keys in separate files, joined map-side), and two-stage aggregation for grouped counts.</dd></div>
+            <div class="kv-row"><dt>sessionization</dt><dd>Collating all activity events for one user session (session cookie or user ID as grouping key) to reconstruct action sequences — the basis of A/B testing and marketing attribution.</dd></div>
+            <div class="kv-row"><dt>human fault tolerance</dt><dd>What immutable inputs and replaceable outputs buy: buggy code can be rolled back and the output simply regenerated (or yesterday’s output switched back in) — recovery from human error, impossible with read-write transactions.</dd></div>
+            <div class="kv-row"><dt>data lake (enterprise data hub)</dt><dd>Dump data raw into the distributed filesystem first, model later — schema-on-read at organizational scale, decoupling data collection from schema design. “Raw data is better.”</dd></div>
+            <div class="kv-row"><dt>preemption</dt><dd>A cluster scheduler killing lower-priority tasks to free resources for higher-priority ones. Google overcommits resources this way; ~5% of one-hour MapReduce tasks get preempted — an order of magnitude above hardware-failure rates — which is why MapReduce was designed for frequent faults.</dd></div>
+            <div class="kv-row"><dt>materialization</dt><dd>Eagerly computing and writing out intermediate state, rather than streaming it. MapReduce materializes every job’s output to the distributed filesystem; Unix pipes and dataflow engines mostly don’t.</dd></div>
+            <div class="kv-row"><dt>dataflow engine</dt><dd>Spark, Tez, Flink: execute an entire workflow as one job, with operators (generalized map/reduce functions) connected flexibly — sort only where needed, no redundant mappers, locality-aware scheduling, in-memory/local-disk intermediates, pipelined startup, JVM reuse.</dd></div>
+            <div class="kv-row"><dt>DAG (directed acyclic graph)</dt><dd>The shape of operator data dependencies in a dataflow engine — the flow of data is graph-shaped. Not the same thing as graph processing, where the data itself is a graph.</dd></div>
+            <div class="kv-row"><dt>RDD (resilient distributed dataset)</dt><dd>Spark’s abstraction tracking each piece of data’s ancestry — which input partitions and operators produced it — so lost intermediate state can be recomputed after a failure.</dd></div>
+            <div class="kv-row"><dt>Pregel / BSP</dt><dd>Bulk synchronous parallel graph processing: each vertex keeps in-memory state across supersteps, processes messages delivered from the previous superstep, and sends messages delivered in the next. Exactly-once delivery, checkpoints for faults. Implementations: Giraph, GraphX, Gelly.</dd></div>
+            <div class="kv-row"><dt>superstep</dt><dd>One BSP iteration. A barrier separates supersteps: every message of round k is copied over the network before round k+1 begins. Vertices are “actors with a schedule and a checkpoint.”</dd></div>
+            <div class="kv-row"><dt>transitive closure</dt><dd>Repeatedly following edges to find everything reachable — all locations within North America, for example. The natural graph algorithm shape that single-pass MapReduce can’t express.</dd></div>
+            <div class="kv-row"><dt>bounded input</dt><dd>The defining assumption of batch processing: input of known, fixed size, so a job knows when it’s read everything and eventually completes. Chapter 11 removes it.</dd></div>
+          </dl>
+
+          <h3>Further reading</h3>
+          <ul class="reading-list">
+            <li><strong>Jeffrey Dean and Sanjay Ghemawat, “MapReduce: Simplified Data Processing on Large Clusters”</strong><span class="src">OSDI, December 2004 — the paper that started it; originally built for search indexes</span></li>
+            <li><strong>Sanjay Ghemawat, Howard Gobioff, and Shun-Tak Leung, “The Google File System”</strong><span class="src">SOSP, October 2003 — the storage layer HDFS reimplements</span></li>
+            <li><strong>Doug McIlroy, “A Quatercentenary History of the Unix Pipe” and the Bell System Technical Journal records</strong><span class="src">the 1964 garden-hose idea, and the 1978 formulation of the Unix philosophy</span></li>
+            <li><strong>Matei Zaharia et al., “Resilient Distributed Datasets: A Fault-Tolerant Abstraction for In-Memory Cluster Computing”</strong><span class="src">NSDI, April 2012 — Spark and the RDD lineage idea</span></li>
+            <li><strong>Grzegorz Malewicz et al., “Pregel: A System for Large-Scale Graph Processing”</strong><span class="src">SIGMOD, June 2010 — bulk synchronous parallel at Google</span></li>
+            <li><strong>Leslie G. Valiant, “A Bridging Model for Parallel Computation”</strong><span class="src">Communications of the ACM, August 1990 — the original BSP model Pregel builds on</span></li>
+            <li><strong>Jimmy Lin and Chris Dyer, “Data-Intensive Text Processing with MapReduce”</strong><span class="src">Morgan &amp; Claypool, 2010 — the free companion for actually writing MapReduce algorithms</span></li>
+            <li><strong>Michael Isard, Mihai Budiu, Yuan Yu, et al., “Dryad: Distributed Data-Parallel Programs from Sequential Building Blocks”</strong><span class="src">EuroSys, March 2007 — the DAG-execution ancestor of the dataflow engines</span></li>
+          </ul>
+        </section>
+
+        <!-- ================= quiz ================= -->
+        <section class="quiz-wrap" id="quiz-section">
+          <div class="quiz-head">
+            <div>
+              <p class="kicker">Check yourself <span class="dim">· 13 questions</span></p>
+              <h2>Chapter 10 quiz</h2>
+              <p>Two written, eleven multiple-choice — pipes, shuffles, joins, and engines.</p>
+            </div>
+            <span class="chip" id="quiz-last">no score yet</span>
+          </div>
+          <div id="quiz"></div>
+          <button class="mark-complete" id="mark-complete" type="button">Mark chapter complete</button>
+        </section>
+
+        <nav class="lesson-pager">
+          <a class="pager-link" href="chapter9.html">
+            <span class="dir">← Previous</span>
+            <span class="title">Consistency and Consensus</span>
+          </a>
+          <a class="pager-link next" href="chapter11.html">
+            <span class="dir">Next chapter →</span>
+            <span class="title">Stream Processing</span>
+          </a>
+        </nav>
+
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container foot-inner">
+      <p>DDIA practice companion · a fan-made study aid for<br>“Designing Data-Intensive Applications” by Martin Kleppmann (O’Reilly)</p>
+      <p>static site · no trackers · progress in localStorage</p>
+    </div>
+  </footer>
+
+  <script>
+    window.QUIZ = {
+      lesson: 'chapter10',
+      questions: [
+        {
+          q: 'State the four principles of the Unix philosophy (1978), and explain what the uniform interface has to do with them. Then reveal.',
+          short: true,
+          answer: '(1) Make each program do one thing well — for a new job, build afresh rather than complicate old programs with new “features.” (2) Expect the output of every program to become the input to another, as yet unknown, program — no cluttered output, no rigidly columnar or binary formats, no insistence on interactive input. (3) Design and build software to be tried early, ideally within weeks — throw away the clumsy parts and rebuild. (4) Use tools in preference to unskilled help, even if you must detour to build them, and expect to discard some afterward. The uniform interface is what makes principle 2 possible: if any program’s output is to feed any program’s input, they must share the same I/O format — in Unix, the file (an ordered sequence of bytes), which can be a real file, a pipe, a device driver, or a socket. Standardizing on newline-separated text lets awk, sort, uniq, and head interoperate. The philosophy reads like a preview of Agile and DevOps — surprisingly little has changed in four decades.'
+        },
+        {
+          q: 'Explain why dataflow engines (Spark, Tez, Flink) outperform chained MapReduce jobs — name at least four concrete reasons, and describe how they tolerate faults differently. Then reveal.',
+          short: true,
+          answer: 'MapReduce materializes every job’s intermediate state to the distributed filesystem: the next job can’t start until the previous one fully finishes (stragglers block everything), mappers often just read back what the previous reducer wrote, and the replicated intermediate files are overkill for scratch data. Dataflow engines run the whole workflow as one job: (1) sorting happens only where actually needed, not by default between every map and reduce; (2) no redundant map tasks — a mapper doesn’t change partitioning, so its work folds into the preceding reduce operator; (3) the scheduler sees the full dependency graph, so it co-locates producers and consumers and exchanges data via shared-memory buffers; (4) intermediates live in memory or on local disk rather than replicated HDFS files; (5) operators start as soon as their input is ready (Flink especially pipelines); (6) JVMs are reused instead of a new one per task. Fault tolerance: rather than rereading durable input from the filesystem, they track each datum’s ancestry (Spark’s RDDs; Flink’s operator checkpoints) and recompute lost state from earlier stages or the original input — which is safe and cheap only if operators are deterministic, since nondeterministic recomputation contradicts what was already sent downstream.'
+        },
+        {
+          q: 'What does the MapReduce shuffle actually do?',
+          options: [
+            'It randomly samples mapper output to balance load',
+            'It shuffles records like a deck of cards to spread them evenly',
+            'Each mapper partitions its output by reducer (hash of the key) into sorted files on local disk; reducers fetch their partition from every mapper over the network and merge them, preserving sort order — no randomness anywhere',
+            'It broadcasts every mapper’s output to all reducers'
+          ],
+          answer: 2,
+          why: 'The name is misleading — nothing is randomized. Partition-by-reducer + sort + copy is the mechanism that brings all key-value pairs with the same key to one reducer, adjacent and in order. It’s also the step you never write: the framework always sorts mapper output before the reducer sees it.'
+        },
+        {
+          q: 'Why is sorting the heart of MapReduce?',
+          options: [
+            'Because sorted files compress better on HDFS',
+            'Because it’s what makes the map tasks parallel',
+            'Because sorting groups all records with the same key adjacently — the mapper’s job is to put data into a form suitable for sorting, and the reducer’s job is to process what sorting grouped. As a bonus, sorting handles larger-than-memory data gracefully (chunk, spill to disk, merge — the SSTable/LSM-tree pattern), and sequential mergesort runs are kind to disks',
+            'Because reducers can only read sorted input formats like Parquet'
+          ],
+          answer: 2,
+          why: 'Counting, joining, grouping — all reduce to “bring related records together,” and sorting is how MapReduce does that. The same logic explains the Unix pipeline: GNU sort spills to disk and parallelizes across cores, which is why the humble cat | awk | sort | uniq -c chain scales past memory.'
+        },
+        {
+          q: 'You must join a 500 GB activity-event log with a 10 MB user-dimension table. What’s the right approach, and why?',
+          options: [
+            'Reduce-side sort-merge join — it’s the only correct join in MapReduce',
+            'Broadcast hash join: every mapper loads the entire 10 MB table into an in-memory hash table, then streams its block of the 500 GB log, looking up each user ID. No shuffle, no sort, no reducers — the small input is “broadcast” to all partitions of the large one',
+            'Sort both datasets alphabetically first, then merge them',
+            'Write the events to a relational database and run the join there'
+          ],
+          answer: 1,
+          why: 'The reduce-side join makes no assumptions — which is its virtue in general and its cost here: a full shuffle and sort of 500 GB for nothing. The broadcast hash join’s assumption (small side fits in memory) is what lets it skip all of that. Hive calls it MapJoin, Pig calls it a replicated join. If the small side is too big for memory, a local read-only index warmed by the page cache gets nearly the same performance.'
+        },
+        {
+          q: 'A celebrity with millions of followers dominates your join key, so one reducer does almost all the work. What do Pig’s skewed join and the two-stage aggregation trick actually do about it?',
+          options: [
+            'They both drop the celebrity’s records as outliers',
+            'Pig first runs a sampling job to identify hot keys, then sends those keys’ records to one of several reducers chosen at random (replicating the other join input to all of them); two-stage aggregation sends a hot key’s records to random reducers that each partially aggregate, then a second job combines the partials into the final value',
+            'They sort the records so the celebrity arrives first and gets it over with',
+            'They give the hot reducer more memory'
+          ],
+          answer: 1,
+          why: 'The random-reducer trick is the same idea as Chapter 6’s random-suffix fix for hot spots in partitioned databases. Crunch’s sharded join does the same as Pig but needs hot keys declared explicitly; Hive’s skewed join optimization stores declared hot keys in separate files and joins them map-side. Remember why skew hurts: a job finishes only when ALL its tasks finish, so every downstream job waits on the slowest reducer.'
+        },
+        {
+          q: 'Why do batch workflows build search indexes and read-only key-value stores rather than write into the serving database directly?',
+          options: [
+            'Because databases cannot ingest data at batch rates',
+            'Because MapReduce code runs in a different network zone',
+            'Because a batch job writing to the database server one record at a time is orders of magnitude slower than its normal throughput, swamps the database when many tasks write in parallel, and breaks the all-or-nothing guarantee — partial side effects from retried and speculatively-executed tasks become visible. Writing immutable files that are bulk-loaded (Voldemort, HBase bulk load) keeps the clean semantics: new files copy across while the old ones keep serving, then an atomic switch',
+            'Because search indexes are always faster than databases'
+          ],
+          answer: 2,
+          why: 'The Voldemort loading pattern is the human-fault-tolerance payoff in miniature: old immutable files stay on disk, so the switch can simply be reversed if anything goes wrong. Building an index is also work MapReduce already does — extracting a key and sorting by it — and read-only stores need simpler data structures (no WAL).'
+        },
+        {
+          q: 'At Google, a MapReduce task that runs for an hour has roughly a 5% risk of being terminated. Why, and what does a 100-task job (10 minutes per task) face?',
+          options: [
+            'Hardware failure — about 5% of machines die per hour, so a 100-task job faces certain failure',
+            'Preemption: mixed-use datacenters run batch jobs at low priority, and higher-priority tasks reclaim their resources by killing them — a rate more than an order of magnitude above hardware failures. A 100 × 10-minute job has a >50% chance that at least one task is terminated, which is why MapReduce retries at task granularity rather than aborting the whole job',
+            'Disk exhaustion — HDFS runs out of space hourly',
+            'Garbage collection — tasks are paused and never resumed'
+          ],
+          answer: 1,
+          why: 'The design insight: it’s not that the hardware is unreliable — it’s that the freedom to arbitrarily terminate processes enables overcommitted resources and better cluster utilization. Among open-source schedulers (YARN, Mesos, Kubernetes) general priority preemption was, at the time of writing, not supported — and in environments where tasks aren’t often terminated, MapReduce’s heavy fault-tolerance machinery makes less sense.'
+        },
+        {
+          q: 'What is the “data lake” idea, and what makes Hadoop better suited to it than an MPP database?',
+          options: [
+            'It’s a data warehouse stored next to an actual lake for natural cooling; Hadoop’s racks are waterproof',
+            'It’s a database with schemas — Hadoop just has more of them',
+            'Dump data raw into the distributed filesystem first, figure out modeling later. HDFS stores byte sequences in any format, so collection isn’t blocked on careful schema design; MPP databases require data structured into their proprietary model before import. Schema interpretation shifts to the consumer — schema-on-read, and “raw data is better”',
+            'It means running analytics queries on a streaming system'
+          ],
+          answer: 2,
+          why: 'A purist prefers the modeling discipline; in practice, simply making data available quickly — even raw and quirky — often beats deciding the ideal model up front, because gathering an organization’s data in one place already enables joins across previously disparate datasets. Hadoop also became the ETL workhorse: dump raw, clean with MapReduce, import into an MPP warehouse.'
+        },
+        {
+          q: 'Pregel’s superstep model — which statement is right?',
+          options: [
+            'Each superstep restarts all vertices from data on HDFS, like a MapReduce job',
+            'A vertex is a stateless function, like a mapper',
+            'In each superstep, a vertex processes the messages delivered from the previous superstep, updates its in-memory state (which persists across supersteps), and sends messages that will be delivered exactly once in the next superstep — with a barrier ensuring all of one round’s messages arrive before the next round starts',
+            'Vertices communicate by querying each other synchronously over TCP'
+          ],
+          answer: 2,
+          why: 'Vertices resemble actors — except state and messages are fault-tolerant (checkpointing at superstep boundaries; roll back to the last checkpoint on failure) and delivery comes in fixed rounds. The message-passing model is what enables batching and the exactly-once guarantee. Partitioning is usually just by vertex ID (the vertex never learns its machine), so cross-machine communication can dominate — and if the graph fits on one machine (even GraphChi-style on local disk), single-machine algorithms often win.'
+        },
+        {
+          q: 'Which is NOT a way dataflow engines improve on MapReduce?',
+          options: [
+            'Sorting only where required, rather than by default between every map and reduce stage',
+            'Folding the downstream mapper’s work into the preceding reduce operator, eliminating pointless map tasks',
+            'Starting operators as soon as their input is ready rather than waiting for the whole prior stage, with intermediates in memory or local disk',
+            'Eliminating the distributed filesystem entirely — jobs read inputs and write outputs directly to the client browser'
+          ],
+          answer: 3,
+          why: 'HDFS (or its kin) remains the substrate: inputs and final outputs still live there, immutable in, completely replaced out. What disappears is only the intermediate state. Bonus advantages: whole-graph scheduling enables locality optimizations (shared memory buffers instead of the network), and JVM reuse cuts per-task startup cost — while Pig/Hive/Cascading code moves from MapReduce to Tez/Spark with a configuration change alone.'
+        },
+        {
+          q: 'Why does declaring joins relationally (Hive, Spark DataFrames, Flink SQL) improve execution efficiency at the machine level, beyond saving the programmer code?',
+          options: [
+            'It doesn’t — it only saves typing',
+            'Because the cost-based query optimizer can analyze the join inputs’ properties and automatically pick the join algorithm (sort-merge, broadcast hash, partitioned hash) — even reordering joins to minimize intermediate state. Simple filters and projections expressed declaratively can also be compiled into vectorized inner loops (Spark JVM bytecode, Impala LLVM) reading only the needed columns',
+            'Because SQL is a compiled language and Java is interpreted',
+            'Because the optimizer stores all intermediate results in RAM permanently'
+          ],
+          answer: 1,
+          why: 'The join algorithm choice can make a big difference to a batch job’s performance — with a declarative join you don’t have to remember the whole taxonomy of this chapter; the optimizer does. The convergence: batch frameworks with built-in operators and optimizers approach MPP-database performance while keeping the freedom to run arbitrary code — they end up as “just systems for storing and processing data.”'
+        },
+        {
+          q: 'What defines batch processing in one word — and what changes when that assumption is removed in Chapter 11?',
+          options: [
+            '“Scheduled” — stream jobs run without schedules',
+            '“Parallel” — stream jobs run on one machine',
+            '“Bounded”: the input has a known, fixed size, so a job knows when it has read everything and eventually completes. With unbounded input, a job is never complete — more work can always arrive, so the system must continuously consume and produce events',
+            '“Immutable” — stream inputs can be modified'
+          ],
+          answer: 2,
+          why: 'Inputs are immutable and outputs derived, in both models — the boundedness of the input is the dividing line. Stream and batch processing are similar in many respects, but unbounded streams change a lot about how the systems are built: windows, watermarks, and reasoning about time itself.'
+        }
+      ]
+    };
+  </script>
+  <script src="../js/shared.js"></script>
+  <script src="../js/quiz.js"></script>
+  <script src="../js/toc.js"></script>
+</body>
+</html>

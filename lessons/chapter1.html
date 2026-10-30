@@ -1,0 +1,779 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chapter 1 · Reliable, Scalable, Maintainable Applications — DDIA Practice</title>
+  <meta name="description" content="A comprehensive study guide to Chapter 1 of Designing Data-Intensive Applications: reliability (hardware, software, human faults), scalability (the Twitter case study, percentiles, tail latency), and maintainability (operability, simplicity, evolvability).">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d14'/%3E%3Cpath d='M16 6l9 10-9 10-9-10z' fill='%23f0b35c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Spline+Sans:wght@300..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
+  
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-active="lessons" class="is-lesson">
+
+  <div class="reading-progress" id="readingProgress" aria-hidden="true"></div>
+
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="../index.html">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <rect x="1" y="2" width="16" height="4" rx="1.5" stroke="#f0b35c" stroke-width="1.6"/>
+          <rect x="1" y="7" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+          <rect x="1" y="12" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+        </svg>
+        DDIA&nbsp;<span class="dim">/ practice</span>
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="../index.html" data-nav="home">Home</a>
+        <a href="../index.html#lessons" data-nav="lessons">Lessons</a>
+        <a href="../flashcards.html" data-nav="flashcards">Flashcards</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+
+    <div class="lesson-hero">
+      <span class="lesson-hero-num" aria-hidden="true">1</span>
+      <div class="container">
+        <a class="crumb" href="../index.html#lessons">← All chapters</a>
+        <p class="kicker">Chapter 01 <span class="dim">· Part I — Foundations</span></p>
+        <h1>Reliable, Scalable, Maintainable Applications</h1>
+        <p class="lede">The three concerns behind every data system — what users expect when it breaks, how it bends under load, and who pays for it staying that way.</p>
+        <div class="lesson-meta">
+          <span class="chip">Reliability</span>
+          <span class="chip">Scalability</span>
+          <span class="chip">Maintainability</span>
+          <span class="chip">Twitter case study</span>
+          <span class="chip">Percentiles</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pullquote container">
+      <p>“The Internet was done so well that most people think of it as a natural resource like the Pacific Ocean, rather than something that was man-made.”</p>
+      <cite>— Alan Kay, in an interview</cite>
+    </div>
+
+    <div class="chapter-layout container">
+
+      <aside class="toc" aria-label="Chapter contents">
+        <p class="toc-title">Ch 1 contents</p>
+        <ul>
+          <li><a href="#s-thinking">1.0 Thinking About Data Systems</a></li>
+          <li><a href="#s-reliability">1.1 Reliability</a></li>
+          <li><a href="#s-hardware" class="sub">1.1.1 Hardware faults</a></li>
+          <li><a href="#s-software" class="sub">1.1.2 Software errors</a></li>
+          <li><a href="#s-humans" class="sub">1.1.3 Human errors</a></li>
+          <li><a href="#s-scalability">1.2 Scalability</a></li>
+          <li><a href="#s-load" class="sub">1.2.1 Describing load</a></li>
+          <li><a href="#s-performance" class="sub">1.2.2 Describing performance</a></li>
+          <li><a href="#s-coping" class="sub">1.2.3 Coping with load</a></li>
+          <li><a href="#s-maintainability">1.3 Maintainability</a></li>
+          <li><a href="#s-operability" class="sub">1.3.1 Operability</a></li>
+          <li><a href="#s-simplicity" class="sub">1.3.2 Simplicity</a></li>
+          <li><a href="#s-evolvability" class="sub">1.3.3 Evolvability</a></li>
+          <li><a href="#s-summary">1.4 Summary &amp; glossary</a></li>
+          <li><a href="#quiz-section">Quiz</a></li>
+        </ul>
+      </aside>
+
+      <div class="lesson-body">
+
+        <!-- ================= 1.0 ================= -->
+        <section class="block reveal" id="s-thinking">
+          <p class="kicker">1.0 <span class="dim">·</span> Before the tools</p>
+          <h2>Thinking about data systems</h2>
+          <p>Most applications today are <strong>data-intensive</strong>, not <strong>compute-intensive</strong>. The CPU is rarely the bottleneck — the real problems are the <em>amount</em> of data, its <em>complexity</em>, and the <em>speed</em> at which it changes. When you find yourself choosing which piece of software to trust with that data, you are doing data-system design, whether you call it that or not.</p>
+          <p>Whatever the application, the same handful of building blocks keep appearing:</p>
+
+          <div class="icon-row">
+            <div class="icon-card">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>
+              <h4>Databases</h4>
+              <p>Store data so it can be found again later, after the process that created it is gone.</p>
+            </div>
+            <div class="icon-card">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>
+              <h4>Caches</h4>
+              <p>Remember the result of an expensive operation, to speed up reads.</p>
+            </div>
+            <div class="icon-card">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+              <h4>Search indexes</h4>
+              <p>Search data by keyword or filter it by various criteria.</p>
+            </div>
+            <div class="icon-card">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 12h13"/><path d="M13 6l6 6-6 6"/><path d="M4 6h7M4 18h7"/></svg>
+              <h4>Stream processing</h4>
+              <p>Send a message to another process, to be handled asynchronously.</p>
+            </div>
+            <div class="icon-card">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
+              <h4>Batch processing</h4>
+              <p>Periodically crunch a large amount of accumulated data.</p>
+            </div>
+          </div>
+
+          <div class="callout note">
+            <p class="callout-title">Why one umbrella — “data systems”</p>
+            <p>Two trends collapsed these categories into a single subject. First, <strong>the boundaries are blurring</strong>: Redis is a datastore routinely used as a message queue; Kafka is a message queue with database-like durability guarantees. Second, <strong>no single tool meets every requirement</strong> anymore — applications stitch together several specialized tools (a cache layer here, a full-text search server there, the main database underneath) and hold them together with application code.</p>
+          </div>
+
+          <p>That last point is the quiet thesis of the whole book: when you combine several tools behind one API, <strong>you have designed a data system</strong> — its guarantees are yours to provide. If a write succeeds but the cache isn’t correctly invalidated, the composite system is broken, no matter how solid each piece was. You are now the database vendor.</p>
+
+          <p>The chapter organizes this responsibility into three concerns that matter for almost all software systems:</p>
+          <div class="term-grid">
+            <a class="term" href="#s-reliability" style="text-decoration:none">
+              <h4>Reliability <span class="tag">§ 1.1</span></h4>
+              <p>Continues to work correctly, even when things go wrong.</p>
+            </a>
+            <a class="term" href="#s-scalability" style="text-decoration:none">
+              <h4>Scalability <span class="tag">§ 1.2</span></h4>
+              <p>Reasonable ways of growing as load increases.</p>
+            </a>
+            <a class="term" href="#s-maintainability" style="text-decoration:none">
+              <h4>Maintainability <span class="tag">§ 1.3</span></h4>
+              <p>Workable for the people who operate and extend it.</p>
+            </a>
+          </div>
+        </section>
+
+        <!-- ================= 1.1 ================= -->
+        <section class="block reveal" id="s-reliability">
+          <p class="kicker">1.1 <span class="dim">·</span> Working correctly</p>
+          <h2>Reliability</h2>
+          <p>The colloquial meaning is forgiving: “works reasonably, even when things go wrong.” Concretely, it means:</p>
+          <ul class="checklist">
+            <li>The application performs the <strong>function</strong> the user expected.</li>
+            <li>It can tolerate the user making <strong>mistakes</strong> or using the software in unexpected ways.</li>
+            <li>Its <strong>performance</strong> is good enough for the required use case, under the expected load and data volume.</li>
+            <li>The system prevents any <strong>unauthorized access</strong> and abuse.</li>
+          </ul>
+
+          <div class="callout">
+            <p class="callout-title">Fault ≠ failure — learn this cold</p>
+            <p>A <strong>fault</strong> is <em>one component of the system deviating from its spec</em>. A <strong>failure</strong> is <em>when the system as a whole stops providing the required service</em>. A dead disk is a fault; the outage it causes (or doesn’t) is the failure. Since it’s impossible to reduce the probability of faults to zero, the design goal is <strong>fault-tolerance</strong> (resilience): build mechanisms so faults don’t turn into failures. When a fault is hidden from the user entirely, we say it was <strong>masked</strong> — the standard example is error-correcting memory quietly fixing a flipped bit.</p>
+          </div>
+
+          <p>In fault-tolerant systems it even makes sense to <strong>deliberately increase the rate of faults</strong>: trigger them regularly (in a controlled way) to keep the tolerance machinery exercised and tested. Netflix’s <strong>Chaos Monkey</strong> — a tool that randomly kills processes in production during working hours — is the famous example: if engineers are used to individual instance failures, they naturally build the service to survive them. And the practice exposes real gaps, because many critical bugs are ultimately <strong>poor error handling</strong>.</p>
+          <div class="callout warn">
+            <p class="callout-title">Prevention beats cure</p>
+            <p>Not all faults can be tolerated once they’ve happened. <strong>Security</strong> is the clearest case: a compromised system that leaks data can’t be “un-leaked” — there is no tolerance mechanism, only prevention.</p>
+          </div>
+
+          <!-- 1.1.1 -->
+          <h3 id="s-hardware">1.1.1 — Hardware faults</h3>
+          <p>When you think “reliability”, you picture hardware: hard disks that crash, RAM that flips bits, the power grid going down, someone unplugging the wrong network cable.</p>
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-value">10–50 yr</span>
+              <span class="stat-label">Rated MTTF of a hard disk</span>
+              <span class="stat-note">mean time to failure — one disk, on its own, is quite reliable</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value red">~1 / day</span>
+              <span class="stat-label">Disks dying in a 10,000-disk cluster</span>
+              <span class="stat-note">10,000 ÷ (10–50 years × 365 days) ≈ 0.5–2.7 per day. Do the math.</span>
+            </div>
+          </div>
+          <p>The first line of defense is <strong>redundancy</strong>: RAID configurations for disks, dual power supplies and hot-swappable CPUs for servers, batteries plus diesel generators for datacenters. Enough redundancy that a single machine’s death is a non-event for the users — a rolling operation rather than an outage.</p>
+          <div class="callout note">
+            <p class="callout-title">The shift — from redundancy to fault tolerance</p>
+            <p>As data volumes and computing demands grew, more machines per application meant proportionally <em>more</em> hardware faults. Meanwhile cloud platforms deliberately traded single-machine reliability for elasticity: an <strong>AWS VM can disappear without warning</strong> as the platform prioritizes flexibility. The response: <strong>software fault-tolerance techniques that tolerate the loss of entire machines</strong> — and <strong>rolling upgrades</strong>, patching one node at a time with no total downtime (an idea we return to in Chapter 4).</p>
+          </div>
+
+          <!-- 1.1.2 -->
+          <h3 id="s-software">1.1.2 — Software errors</h3>
+          <div class="callout">
+            <p class="callout-title">The key contrast</p>
+            <p>Hardware faults are usually <strong>random and independent</strong> — one disk dies, the others don’t care. Software errors are <strong>systematic</strong>: the same bug runs on every node, and one bad input can trigger it everywhere at once. Correlated failures — much more dangerous than independent ones.</p>
+          </div>
+          <p>The canonical examples:</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>The bad input</h4>
+              <p>A software bug that crashes every application server when given a particular input — the <strong>leap second on June 30, 2012</strong> hung many applications simultaneously via a Linux kernel bug: one input, fleet-wide hang.</p>
+            </div>
+            <div class="term">
+              <h4>The runaway process</h4>
+              <p>A process that leaks or hogs some shared resource — CPU, memory, disk space, network bandwidth — until the whole system starves.</p>
+            </div>
+            <div class="term">
+              <h4>The sick dependency</h4>
+              <p>A service the system depends on slows down, stops responding, or starts returning corrupted responses — and every caller degrades with it.</p>
+            </div>
+            <div class="term">
+              <h4>The cascading failure</h4>
+              <p>One small fault in one component triggers a fault in another, which triggers the next — the failure propagates through the system like dominoes.</p>
+            </div>
+          </div>
+          <p>The root insight: these bugs are usually <strong>dormant assumptions</strong> — software believes something about its environment that is <em>almost always true</em>, until one day it stops being true (memory never grows this fast; this clock never jumps; that certificate never expires).</p>
+          <p>No quick fix exists, but the mitigations compound:</p>
+          <ul class="checklist">
+            <li>Careful thinking about <strong>assumptions and interactions</strong> in the system.</li>
+            <li><strong>Thorough testing</strong> — corner cases, failure modes, unusual conditions.</li>
+            <li><strong>Process isolation</strong> — let processes crash and restart, so a bad state doesn’t fester.</li>
+            <li>Allowing processes to <strong>crash and restart</strong> rather than limp along in a corrupted state.</li>
+            <li>Measuring, monitoring, and analyzing production behavior — <strong>telemetry</strong>.</li>
+            <li><strong>Self-checking systems</strong> — e.g. a message queue that verifies incoming message count equals outgoing, and alerts on any discrepancy.</li>
+          </ul>
+
+          <!-- 1.1.3 -->
+          <h3 id="s-humans">1.1.3 — Human errors</h3>
+          <div class="callout warn">
+            <p class="callout-title">The stat nobody expects</p>
+            <p>One study of large internet services found that <strong>configuration errors were the leading cause of outages</strong>, while <strong>hardware faults played a role in only 10–25%</strong>. Humans — operators and developers — are the largest fault source, and design must assume it.</p>
+          </div>
+          <p>Six approaches, roughly in order of leverage:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">i.</span><div><h4>Minimize the opportunities for error</h4><p>Well-designed abstractions, APIs, and admin interfaces that make “the right thing” the easy thing. But if you make it too restrictive, people will work around it — and the workaround is where the mistakes live.</p></div></div>
+            <div class="num-card"><span class="n">ii.</span><div><h4>Decouple mistake-prone from failure-prone</h4><p>Provide non-production <strong>sandboxes</strong> with real (but non-live) data, where people can experiment and make mistakes without affecting real users.</p></div></div>
+            <div class="num-card"><span class="n">iii.</span><div><h4>Test thoroughly, at all levels</h4><p>Unit tests, whole-system integration tests, manual tests. Automated tests covering rare corner cases are the ones that pay off years later.</p></div></div>
+            <div class="num-card"><span class="n">iv.</span><div><h4>Make recovery quick and easy</h4><p>Fast rollback for bad configs, gradual code rollout (a bug then hits only a small subset of users), and tools to recompute data after a bad write.</p></div></div>
+            <div class="num-card"><span class="n">v.</span><div><h4>Monitor in detail and clearly</h4><p>“Telemetry”: performance metrics and error rates that give early warning and make diagnosis possible. (More on this in § 1.3.1.)</p></div></div>
+            <div class="num-card"><span class="n">vi.</span><div><h4>Good management practices and training</h4><p>Runbooks, blameless postmortems, and not treating people as “plug-and-play components”.</p></div></div>
+          </div>
+          <div class="callout">
+            <p class="callout-title">How important is reliability, really?</p>
+            <p>It’s easy to think reliability only matters for nuclear plants and air traffic control. It doesn’t. A buggy business application means <strong>lost productivity and legal risk</strong> from wrong data; an e-commerce outage means <strong>lost revenue and a reputation hit</strong>. Even “noncritical” apps owe their users something — a parent storing <em>all the photos of their children</em> will not care that the service was “just a hobby project”. There are legitimate cases for cutting corners — an unproven prototype, thin margins, a trivial product — but if it’s deliberate, fine; if it’s accidental, that’s just a bug you haven’t noticed yet.</p>
+          </div>
+        </section>
+
+        <!-- ================= 1.2 ================= -->
+        <section class="block reveal" id="s-scalability">
+          <p class="kicker">1.2 <span class="dim">·</span> Coping with growth</p>
+          <h2>Scalability</h2>
+          <p>Even a system that works reliably today is not reliable if it falls over at twice the load. <strong>Scalability is the ability of a system to cope with increased load</strong> — but resist using it as a one-dimensional label. “X scales” and “Y doesn’t scale” are meaningless sentences. The real questions are always: <em>if the system grows in a particular way, what are our options for coping? And how do we add computing resources to handle that growth?</em></p>
+          <p>Growth doesn’t have to be symmetric: 10,000 → 100,000 concurrent users is one conversation; 1 million → 10 million is a different one, even though both are “×10”.</p>
+
+          <!-- 1.2.1 -->
+          <h3 id="s-load">1.2.1 — Describing load</h3>
+          <p>First describe the load properly. <strong>Load parameters</strong> are the few numbers that characterize it — and the best choice depends on the architecture: requests per second for a web server, the read/write ratio for a database, the number of simultaneously active users in a chat room, the cache hit rate, and so on. Sometimes the critical parameter is something more exotic — and Twitter is the canonical case.</p>
+
+          <div class="figure">
+            <p class="fig-head">Case study · Twitter, November 2012</p>
+            <div class="stat-grid">
+              <div class="stat">
+                <span class="stat-value">4.6k/s</span>
+                <span class="stat-label">Average rate of post-tweet requests</span>
+                <span class="stat-note">peaking at over 12k/s</span>
+              </div>
+              <div class="stat">
+                <span class="stat-value">12k/s</span>
+                <span class="stat-label">Peak post rate</span>
+                <span class="stat-note">write volume — small in absolute terms</span>
+              </div>
+              <div class="stat">
+                <span class="stat-value teal">300k/s</span>
+                <span class="stat-label">Home timeline read rate</span>
+                <span class="stat-note">~65× the write rate — this is the load that matters</span>
+              </div>
+            </div>
+            <div class="callout" style="margin-top:0">
+              <p class="callout-title">Fan-out — the load parameter that decides everything</p>
+              <p>Borrowed from electronics (the number of logic-gate inputs attached to one output), <strong>fan-out</strong> here means the number of requests one incoming request triggers. For posting a tweet, the fan-out is <em>the number of followers</em> — and that single number determines which architecture works.</p>
+            </div>
+            <p class="fig-caption">Handling a timeline request is the hard part: 300k/sec of them, each potentially requiring a merge across hundreds of followees.</p>
+          </div>
+
+          <h3>Approach 1 — fan-out-on-read (pull)</h3>
+          <p>Store all tweets in a single global collection. To render a home timeline, look up everyone you follow, fetch all their tweets, and merge them sorted by time:</p>
+          <div class="code-block"><span class="kw">SELECT</span> tweets.*, users.* <span class="kw">FROM</span> tweets
+  <span class="kw">JOIN</span> users   <span class="kw">ON</span> tweets.sender_id    = users.id
+  <span class="kw">JOIN</span> follows <span class="kw">ON</span> follows.followee_id = users.id
+  <span class="kw">WHERE</span> follows.follower_id = current_user</div>
+          <p>Simple to post (one insert), expensive to read — a heavy query over the follow graph for <em>every</em> timeline view, ×300k per second.</p>
+
+          <h3>Approach 2 — fan-out-on-write (push)</h3>
+          <p>Maintain a <strong>per-user home timeline cache</strong> — like a mailbox. When user A posts a tweet, walk A’s follower list and insert the tweet into <em>every follower’s</em> cache. Timeline reads become a trivial lookup: fetch the cache for the requesting user, done.</p>
+
+          <div class="callout note">
+            <p class="callout-title">The history, and why they switched</p>
+            <p>Twitter started with Approach 1 and struggled as the load grew — then switched to Approach 2. The decisive reasoning: <strong>posting is roughly two orders of magnitude rarer than timeline reads</strong> (~4.6k/s vs ~300k/s), so it pays to do more work at write time and make the 65×-more-frequent reads cheap.</p>
+          </div>
+
+          <p>But push has its own dark side, and the averages hide it:</p>
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-value">75</span>
+              <span class="stat-label">Average followers per tweet</span>
+              <span class="stat-note">4.6k tweets/s × 75 ≈ <strong>345k writes/s</strong> to timeline caches — heavy but survivable</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value red">30M+</span>
+              <span class="stat-label">Followers of the biggest celebrities</span>
+              <span class="stat-note">a single tweet = <strong>30M+ cache writes</strong> — a thundering herd for one post</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value teal">5 s</span>
+              <span class="stat-label">Twitter’s delivery target</span>
+              <span class="stat-note">a tweet should appear in followers’ timelines within five seconds</span>
+            </div>
+          </div>
+
+          <div class="callout">
+            <p class="callout-title">The hybrid (what Twitter actually runs)</p>
+            <p>Normal users’ tweets fan out at post time — Approach 2. <strong>Celebrities are excepted:</strong> their tweets are <em>not</em> pushed to follower caches; instead they’re fetched separately and merged in at read time — Approach 1, applied only to the accounts where push would explode. A nice demonstration that <em>the load parameters pick the architecture</em> — and a design we revisit in Chapter 12.</p>
+          </div>
+
+          <!-- 1.2.2 -->
+          <h3 id="s-performance">1.2.2 — Describing performance</h3>
+          <p>Once load is defined, you can ask performance questions — and there are exactly two worth asking:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Load up, resources fixed</h4><p>Increase the load and keep resources unchanged — <em>how does performance suffer?</em></p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Load up, performance fixed</h4><p>Increase the load — <em>how much do resources need to grow</em> to keep performance unchanged?</p></div></div>
+          </div>
+          <p>How you measure depends on the system type: <strong>batch</strong> systems care about <strong>throughput</strong> (records processed per second, or total time to process a fixed job); <strong>online</strong> systems care about <strong>response time</strong> — the time between a client sending a request and receiving a response.</p>
+          <div class="callout note">
+            <p class="callout-title">Footnote from the book — the ideal vs. reality</p>
+            <p>The ideal batch time is simply dataset size ÷ throughput. In practice it’s worse: <strong>skew</strong> (data unevenly distributed) means some steps take far longer, and the job waits on <strong>the slowest task</strong> to finish. Sound familiar? It will — it’s tail latency, in batch clothing.</p>
+          </div>
+          <div class="callout">
+            <p class="callout-title">Latency vs. response time — not synonyms</p>
+            <p><strong>Response time</strong> is what the <em>client</em> sees: the service’s actual processing (<strong>service time</strong>) plus network delays plus queueing delays. <strong>Latency</strong>, strictly, is how long the request waits <em>latent</em> — sitting in a queue, unhandled — before being served. A single slow request inflates its response time; the requests stuck behind it inherit its latency.</p>
+          </div>
+          <p>Even on an identical workload, response times vary — repeatedly, on the same request:</p>
+          <ul>
+            <li>a context switch to a background process,</li>
+            <li>a lost network packet and its TCP retransmission,</li>
+            <li>a garbage-collection pause,</li>
+            <li>a page fault forcing a read from disk,</li>
+            <li>even mechanical vibrations in the server rack.</li>
+          </ul>
+          <p>So you don’t report a number — you report a <strong>distribution</strong>.</p>
+
+          <h4>Percentiles — the honest way to talk about response time</h4>
+          <p>Sort your response times and take the middle (<strong>median</strong>, p50) and tails: <strong>p95</strong>, <strong>p99</strong>, <strong>p999</strong>. If your p95 is 1.5 seconds, then 5 out of 100 requests take 1.5s or more — <em>on purpose</em>, that’s the definition. The median tells the typical story; the tails tell the truth about your worst users’ experience. And the median is per-<em>request</em>: a session making several requests compounds the chance of hitting the slow half well beyond 50%.</p>
+
+          <div class="callout warn">
+            <p class="callout-title">The Amazon numbers — why the tail is where the money is</p>
+            <p>Amazon reported that response-time requirements are set <strong>at the 99.9th percentile</strong> even though that’s 1 request in 1,000 — because the slowest requests correlate with <strong>the customers with the most data on their accounts, i.e. the heaviest and most valuable users</strong>. Meanwhile, an increase of <strong>100 ms in response time cost ~1% of sales</strong>, and a <strong>1-second slowdown reduced customer satisfaction by ~16%</strong>. Optimizing the p99.99 (the absolute worst request in 10,000) was judged too expensive — Amazon drew its own line, and so should you.</p>
+          </div>
+
+          <div class="callout note">
+            <p class="callout-title">SLO / SLA</p>
+            <p>An <strong>SLO</strong> (service level objective) is the performance you expect from a service; an <strong>SLA</strong> (service level agreement) is its contractual twin — the version customers can demand refunds for when it’s missed. Example SLO: <em>the service is considered “up” if the median response time is under 200 ms <strong>and</strong> the 99th percentile under 1 second <strong>and</strong> it’s available at least 99.9% of the time.</em></p>
+          </div>
+
+          <h4>Head-of-line blocking — why you measure from the client</h4>
+          <p>A server can only process so many things in parallel (CPU cores); if a few slow requests arrive together, they hold up all the requests behind them — <strong>head-of-line blocking</strong>. Your server-side metrics never show it; your users always feel it. So measure response times on the <em>client side</em>, where the queue is real.</p>
+
+          <div class="callout warn">
+            <p class="callout-title">Load-testing gotcha</p>
+            <p>If your load generator sends a request and waits for each response before sending the next, you have artificially emptied the queue — the test <em>underestimates</em> queueing and, therefore, tail latency. The load generator must keep sending independently of response time.</p>
+          </div>
+
+          <div class="figure">
+            <p class="fig-head">Figure 1-4 (recreated) · Response times of 100 requests</p>
+            <div class="fig-bars" id="fig14-bars"></div>
+            <div class="fig-legend">
+              <span><span class="dot" style="background:rgba(240,179,92,.6)"></span>request</span>
+              <span><span class="dot" style="background:rgba(239,128,128,.6)"></span>slow (&gt; p95)</span>
+              <span class="fig-readout" id="fig14-readout">hover a bar…</span>
+            </div>
+            <p class="fig-caption">Response times of requests to a backend service, as they arrived (not sorted). <strong>Median</strong> and <strong>p95</strong> marked. Most requests are fast; a handful of outliers dominate the tail — the <strong>arithmetic mean</strong> would sit somewhere between, describing almost nothing.</p>
+          </div>
+
+          <h4>Tail latency amplification</h4>
+          <p>The final indignity: your service can be p99.9-fast and your pages still slow, because <strong>an end-user request fans out into multiple backend calls, and the page waits for the slowest one</strong> — even when the calls run in parallel. A small percentage of slow calls per service becomes a large percentage of slow <em>pages</em> (Dean &amp; Barroso, “The Tail at Scale”).</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 1-5 (recreated) · One page load → 25 backend calls</p>
+            <div class="fig-calls" id="fig15-calls"></div>
+            <p class="fig-caption">Say each backend call has a <strong>1-in-100 chance of being slow</strong>. The page is slow if <em>any</em> of its 25 calls is slow: <strong>P(slow page) = 1 − 0.99<sup>25</sup> ≈ 22%</strong>. The tail didn’t grow — it multiplied. Small per-call slowness becomes page-level slowness at scale.</p>
+          </div>
+
+          <h4>Percentiles in practice</h4>
+          <p>Real systems usually compute percentiles over rolling windows — e.g. medians and percentiles calculated every minute over the last 10 minutes — and there are efficient approximation algorithms: <strong>forward decay</strong>, <strong>t-digest</strong>, <strong>HdrHistogram</strong>.</p>
+          <div class="callout warn">
+            <p class="callout-title">Never average percentiles</p>
+            <p>The mean of multiple p95 values is <strong>mathematically meaningless</strong> — you cannot combine quantiles that way. If you need a global p95 across 100 servers, add their <strong>histograms</strong> together and take the quantile of the sum. (This exact mistake is endemic in dashboards.)</p>
+          </div>
+
+          <!-- 1.2.3 -->
+          <h3 id="s-coping">1.2.3 — Approaches for coping with load</h3>
+          <p>People increasingly deal with load by scaling <em>out</em>, but every order-of-magnitude growth should make you <strong>rethink the architecture</strong> rather than just multiply what you had.</p>
+          <dl class="kv">
+            <div class="kv-row"><dt>Scaling up (vertical)</dt><dd>A more powerful machine — more CPUs, more RAM. Simple, no distribution to reason about, and it doesn’t scale forever.</dd></div>
+            <div class="kv-row"><dt>Scaling out (horizontal)</dt><dd>More machines, load spread across them — the <strong>shared-nothing</strong> architecture. Good architectures pragmatically mix both.</dd></div>
+            <div class="kv-row"><dt>Elastic</dt><dd>Automatically adds resources when load increases. Attractive for highly variable load, but operationally surprising; manually-scaled systems are simpler and behave predictably.</dd></div>
+            <div class="kv-row"><dt>Stateful vs. stateless</dt><dd>Stateless services scale out easily; <strong>stateful data systems are dramatically harder to distribute</strong> — the central tension of Part II. Conventional wisdom: keep your database on one node until the cost or availability requirements force you to shard.</dd></div>
+          </dl>
+          <div class="callout note">
+            <p class="callout-title">Perspective — same throughput, different universes</p>
+            <p>Two systems with <em>identical throughput</em>: 100,000 requests/second of 1 kB each, versus 3 requests/minute of 2 GB each. Nothing about the first design informs the second. Numbers alone don’t scale you — <em>which</em> load parameters dominate decides the architecture.</p>
+          </div>
+          <div class="callout warn">
+            <p class="callout-title">There is no magic scaling sauce</p>
+            <p>No one-size-fits-all scalable architecture exists. The problem might be read volume, write volume, dataset size, data complexity, latency requirements, access patterns — or a combination. An architecture built on <strong>wrong load-parameter assumptions</strong> wastes effort or actively backfires. And for early-stage products, iterating on features usually beats engineering for hypothetical load. If it hurts, you’ll know exactly where — and that’s cheaper than guessing.</p>
+          </div>
+        </section>
+
+        <!-- ================= 1.3 ================= -->
+        <section class="block reveal" id="s-maintainability">
+          <p class="kicker">1.3 <span class="dim">·</span> The long game</p>
+          <h2>Maintainability</h2>
+          <p>The majority of a software system’s cost isn’t writing it — it’s <strong>ongoing maintenance</strong>: fixing bugs, keeping systems operational, investigating failures, adapting to new platforms, shoehorning in new use cases, repaying technical debt, and shipping yet more features. Everyone knows the result: “<em>Every legacy system is unpleasant in its own way.</em>”</p>
+          <p>Since we can’t opt out of maintenance, we should design systems that minimize it — around three principles:</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Operability <span class="tag">§ 1.3.1</span></h4>
+              <p>Make life easy for the operations team — keep the system running <em>smoothly</em>.</p>
+            </div>
+            <div class="term">
+              <h4>Simplicity <span class="tag">§ 1.3.2</span></h4>
+              <p>Make it easy for <em>new engineers</em> to understand the system — most complexity is accidental, and it can be removed. (Not the same as a simple user interface.)</p>
+            </div>
+            <div class="term">
+              <h4>Evolvability <span class="tag">§ 1.3.3</span></h4>
+              <p>Make it easy for engineers to change the system for unanticipated use cases. Also called extensibility, modifiability, or plasticity.</p>
+            </div>
+          </div>
+
+          <!-- 1.3.1 -->
+          <h3 id="s-operability">1.3.1 — Operability: making life easy for operations</h3>
+          <div class="pullquote">
+            <p>“Good operations can often work around the limitations of bad software, but good software cannot run reliably with bad operations.”</p>
+            <cite>— an operations truism worth tattooing somewhere</cite>
+          </div>
+          <p>An operations team typically keeps a software system running — the to-do list that never ends:</p>
+          <ul class="checklist">
+            <li>Monitor the health of the system, and <strong>quickly restore service</strong> when it degrades.</li>
+            <li><strong>Track down the cause</strong> of failures (e.g. a network failure, or an application bug).</li>
+            <li>Keep <strong>software and platforms patched</strong> — including security patches.</li>
+            <li>Watch how <strong>systems affect each other</strong>, so a risky change doesn’t damage something else.</li>
+            <li>Anticipate future problems before they hit (capacity planning: “will this survive the launch?”).</li>
+            <li>Establish good practices and tooling for <strong>deployment, config management, and more</strong>.</li>
+            <li>Perform complex maintenance tasks (e.g. platform migrations between servers or datacenters).</li>
+            <li>Maintain the <strong>security</strong> of the system as configuration and organization change.</li>
+            <li>Define processes that make <strong>production predictable</strong> — and keep things stable.</li>
+            <li>Preserve the <strong>organization’s knowledge</strong> about the system as people come and go.</li>
+          </ul>
+          <p>What does good operability look like in a data system itself? The book’s checklist:</p>
+          <ul class="checklist">
+            <li><strong>Visibility</strong> into the system’s runtime behavior and internal metrics — monitoring.</li>
+            <li><strong>Automation and standard tools</strong> support — integration with the organization’s way of doing things.</li>
+            <li><strong>No dependence on individual machines</strong> — take machines down for maintenance while the system runs.</li>
+            <li><strong>Good documentation and an easy-to-understand operational model</strong> — “if I do X, Y will happen”.</li>
+            <li><strong>Sensible defaults</strong>, but the freedom to override them when needed.</li>
+            <li><strong>Self-healing where appropriate</strong>, but with manual control still available for operators.</li>
+            <li><strong>Predictable behavior</strong> — minimal surprises.</li>
+          </ul>
+
+          <!-- 1.3.2 -->
+          <h3 id="s-simplicity">1.3.2 — Simplicity: managing complexity</h3>
+          <p>Left alone, software <strong>rot</strong> into a <strong>big ball of mud</strong>: a sprawling, incomprehensible mess. The symptoms, which you can almost smell:</p>
+          <p>
+            <span class="chip lit">explosion of state space</span>
+            <span class="chip lit">tight coupling</span>
+            <span class="chip lit">tangled dependencies</span>
+            <span class="chip lit">inconsistent naming</span>
+            <span class="chip lit">performance hacks</span>
+            <span class="chip lit">special-casing workarounds</span>
+          </p>
+          <p>When a system is hard to understand, the consequences compound: timelines overrun, and every change risks bugs from <strong>hidden assumptions, unintended consequences, and missed interactions</strong>.</p>
+          <div class="callout">
+            <p class="callout-title">Accidental vs. essential complexity — the crucial split</p>
+            <p>Moseley &amp; Marks (“Out of the Tar Pit”) separate <strong>essential complexity</strong> — inherent to the problem itself — from <strong>accidental complexity</strong> — not inherent to the problem, only to the implementation. Simplifying a system <strong>does not mean removing functionality</strong>; it means removing its <em>accidental</em> complexity.</p>
+          </div>
+          <p>The best weapon against accidental complexity is <strong>abstraction</strong>: hide the implementation details behind a clean façade. A good abstraction can be reused across applications — and reusing a better implementation beats reimplementing it badly, so quality improvements benefit every user of the abstraction. You already live on a tower of them: <strong>high-level programming languages</strong> hide machine code, registers, and syscalls; <strong>SQL</strong> hides on-disk and in-memory data structures, concurrent requests, and crash-inconsistency handling. The hard part — still an open research problem, especially in distributed systems — is <em>finding good abstractions</em>.</p>
+
+          <!-- 1.3.3 -->
+          <h3 id="s-evolvability">1.3.3 — Evolvability: making change easy</h3>
+          <p>Requirements never stay fixed — they shift under you: organizational changes, new facts surface, unanticipated use cases appear, business priorities pivot, users ask for the thing they just saw, platforms get deprecated, and legal or regulatory requirements arrive. Growth itself forces architectural change.</p>
+          <p>Agile working patterns — TDD, refactoring — provide techniques for change at the small scale (a few files of code). This book targets the same agility at the <strong>data system level</strong> — hence “evolvability”.</p>
+          <div class="callout story">
+            <p class="callout-title">Thought experiment</p>
+            <p>You built a Twitter clone with <strong>Approach 1</strong> (fan-out-on-read). It’s now melting under load, and you want <strong>Approach 2</strong> (fan-out-on-write with per-user timeline caches). How would you “refactor” that — a live, social, write-heavy system — from pull to push? What do you migrate first? What breaks if both run at once? (Keep this feeling. Chapter 12 returns to it as the kind of problem derived data exists to solve.)</p>
+          </div>
+          <p>And simplicity is a prerequisite: it’s hard to change a system nobody understands.</p>
+        </section>
+
+        <!-- ================= 1.4 ================= -->
+        <section class="block reveal" id="s-summary">
+          <p class="kicker">1.4 <span class="dim">·</span> Pulling it together</p>
+          <h2>Summary</h2>
+          <div class="callout note">
+            <p class="callout-title">The chapter in one card</p>
+            <p>Software has <strong>functional requirements</strong> (what it should do) and <strong>nonfunctional requirements</strong> — security, reliability, compliance, scalability, compatibility, maintainability — and this chapter is the latter. <strong>Reliability</strong>: correct behavior under faults (hardware faults are random and independent; software faults are systematic; human error is inevitable — tolerate all three). <strong>Scalability</strong>: describe load with load parameters, describe performance with percentiles, add capacity to stay reliable under load. <strong>Maintainability</strong>: build systems with clean abstractions and good operability so engineers and ops can live with them. There are no easy fixes — but the same patterns recur, and the rest of the book is those patterns.</p>
+          </div>
+
+          <h3 id="s-glossary">Glossary</h3>
+          <dl class="kv">
+            <div class="kv-row"><dt>data-intensive</dt><dd>The dominant application profile: the challenge is the amount/complexity/velocity of data, not raw CPU cycles.</dd></div>
+            <div class="kv-row"><dt>load parameters</dt><dd>The few numbers that describe current load (req/s, read/write ratio, active users, fan-out…) — architecture-dependent.</dd></div>
+            <div class="kv-row"><dt>fan-out</dt><dd>Number of requests needed to serve one incoming request; for a tweet, the number of followers.</dd></div>
+            <div class="kv-row"><dt>fault</dt><dd>One component deviating from its spec.</dd></div>
+            <div class="kv-row"><dt>failure</dt><dd>The whole system stopping service. Goal: faults don’t become failures.</dd></div>
+            <div class="kv-row"><dt>fault-tolerant / resilient</dt><dd>Designed to keep working correctly, even when faults occur.</dd></div>
+            <div class="kv-row"><dt>MTTF</dt><dd>Mean time to failure — e.g. hard disks rated 10–50 years (per disk; a 10,000-disk fleet loses one a day).</dd></div>
+            <div class="kv-row"><dt>rolling upgrade</dt><dd>Patching one node at a time so the system never fully goes down.</dd></div>
+            <div class="kv-row"><dt>cascading failure</dt><dd>A fault in one component triggering faults in others, propagating through the system.</dd></div>
+            <div class="kv-row"><dt>throughput</dt><dd>Records processed per second (batch), or the time to complete a fixed job.</dd></div>
+            <div class="kv-row"><dt>response time</dt><dd>Client’s view: send request → receive response (service time + network + queueing).</dd></div>
+            <div class="kv-row"><dt>latency / service time</dt><dd>Latency: how long a request waits before being handled. Service time: how long the actual processing takes.</dd></div>
+            <div class="kv-row"><dt>p50 / p95 / p99 / p999</dt><dd>Percentiles of the response-time distribution — median and increasingly harsh tail views.</dd></div>
+            <div class="kv-row"><dt>tail latency</dt><dd>The slowest fraction of requests (p95+). Where your heaviest, most valuable users live.</dd></div>
+            <div class="kv-row"><dt>head-of-line blocking</dt><dd>A few slow requests holding up subsequent ones in a limited-parallelism server.</dd></div>
+            <div class="kv-row"><dt>tail latency amplification</dt><dd>A page needing multiple backend calls waits for the slowest one — small per-call slowness becomes large per-page slowness.</dd></div>
+            <div class="kv-row"><dt>SLO / SLA</dt><dd>Expected performance/availability targets; the SLA is the contractual, refund-triggering version.</dd></div>
+            <div class="kv-row"><dt>scale up / scale out</dt><dd>Bigger machines vs. more machines; “shared-nothing” is the horizontal arrangement.</dd></div>
+            <div class="kv-row"><dt>elastic</dt><dd>A system that automatically adds capacity as load increases (at operational complexity).</dd></div>
+            <div class="kv-row"><dt>accidental complexity</dt><dd>Complexity not inherent to the problem, only to the implementation — the removable kind.</dd></div>
+            <div class="kv-row"><dt>abstraction</dt><dd>A clean façade that hides implementation detail and can be reused — the weapon against accidental complexity.</dd></div>
+            <div class="kv-row"><dt>operability</dt><dd>How easy the system is for ops to run smoothly.</dd></div>
+            <div class="kv-row"><dt>simplicity</dt><dd>How easily new engineers understand the system (≠ a simple UI).</dd></div>
+            <div class="kv-row"><dt>evolvability</dt><dd>How easily engineers can adapt it to unanticipated use cases.</dd></div>
+            <div class="kv-row"><dt>telemetry</dt><dd>Detailed, clear monitoring — performance metrics and error rates that enable early warning and diagnosis.</dd></div>
+          </dl>
+
+          <h3 id="s-reading">Further reading</h3>
+          <ul class="reading-list">
+            <li><strong>Dean &amp; Barroso, “The Tail at Scale”</strong><span class="src">Communications of the ACM, 2013 — tail latency amplification, latency-due-to-variability</span></li>
+            <li><strong>Moseley &amp; Marks, “Out of the Tar Pit”</strong><span class="src">2006 — accidental vs. essential complexity</span></li>
+            <li><strong>Rich Hickey, “Simple Made Easy”</strong><span class="src">Strange Talk / Strange Loop, 2011 — simplicity as a design virtue</span></li>
+            <li><strong>Netflix, “The Simian Army”</strong><span class="src">2011 — Chaos Monkey and deliberate fault injection</span></li>
+            <li><strong>Hamilton, “On Designing and Deploying Internet-Scale Services”</strong><span class="src">LISA 2007 — operations and reliability practice at scale</span></li>
+            <li><strong>Krikorian, “Timelines at Scale”</strong><span class="src">QCon 2012 — Twitter’s fan-out architecture, in Twitter’s own words</span></li>
+          </ul>
+        </section>
+
+        <!-- ================= quiz ================= -->
+        <section class="quiz-wrap" id="quiz-section">
+          <div class="quiz-head">
+            <div>
+              <p class="kicker">Check yourself <span class="dim">· 12 questions</span></p>
+              <h2>Chapter 1 quiz</h2>
+              <p>Two written, ten multiple-choice — covering the whole chapter, from Chaos Monkey to histogram aggregation.</p>
+            </div>
+            <span class="chip" id="quiz-last">no score yet</span>
+          </div>
+          <div id="quiz"></div>
+          <button class="mark-complete" id="mark-complete" type="button">Mark chapter complete</button>
+        </section>
+
+        <nav class="lesson-pager">
+          <a class="pager-link" href="../index.html#lessons">
+            <span class="dir">← Back to</span>
+            <span class="title">Curriculum</span>
+          </a>
+          <a class="pager-link next" href="chapter2.html">
+            <span class="dir">Next chapter →</span>
+            <span class="title">Data Models and Query Languages</span>
+          </a>
+        </nav>
+
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container foot-inner">
+      <p>DDIA practice companion · a fan-made study aid for<br>“Designing Data-Intensive Applications” by Martin Kleppmann (O’Reilly)</p>
+      <p>static site · no trackers · progress in localStorage</p>
+    </div>
+  </footer>
+
+  <script>
+    window.QUIZ = {
+      lesson: 'chapter1',
+      questions: [
+        {
+          q: 'Your service’s p50 latency is 100 ms, but p99 is 10 seconds — the average looks fine. Why is this still serious? Reason it out, then reveal.',
+          short: true,
+          answer: 'User requests fan out into many backend calls — any slow call makes the whole page slow, so users live in the tail (tail latency amplification). Amazon found slow pages hit sales (+100 ms → −1% sales), and the slowest requests correlate with the heaviest, most valuable customers.'
+        },
+        {
+          q: 'Twitter fans out normal users’ tweets at post time (push) but fetches celebrities’ tweets and merges them at read time (pull). Why the split? Think through the load parameters, then reveal.',
+          short: true,
+          answer: 'Posting is ~2 orders of magnitude rarer than timeline reads (~4.6k/s vs ~300k/s), so doing more work at write time pays for the average user (75 followers → 4.6k tweets/s ≈ 345k cache writes/s, within the 5-second delivery target). But a celebrity with 30M+ followers turns one tweet into 30M+ writes — so celebrity tweets are excepted from the push and merged at read time instead. Load parameters pick the architecture.'
+        },
+        {
+          q: 'A disk dies — one machine’s storage deviates from its spec — but the service keeps running because replicas cover it. What just happened, in the book’s vocabulary?',
+          options: [
+            'A failure occurred but was masked by redundancy',
+            'A fault occurred, and fault-tolerance kept it from becoming a failure',
+            'A fault escalated into a partial failure that users luckily didn’t notice',
+            'Neither a fault nor a failure — the spec was still met end-to-end'
+          ],
+          answer: 1,
+          why: 'A fault is one component deviating from spec; a failure is the whole system stopping. RAID/replication masked the fault — that masking IS fault tolerance.'
+        },
+        {
+          q: 'Hard disks are rated at an MTTF of 10–50 years. Your cluster has 10,000 disks. What should you expect?',
+          options: [
+            'A disk to fail roughly once per day — fleet size, not per-disk quality, now sets the failure rate',
+            'Effectively zero failures — modern disks are that reliable',
+            'One failure every 10–50 days across the fleet',
+            'Failures only when the power grid goes out'
+          ],
+          answer: 0,
+          why: '10,000 disks ÷ (10–50 years × 365 days) ≈ 0.5–2.7 disk deaths per day. This arithmetic is why single-machine redundancy gave way to software fault tolerance.'
+        },
+        {
+          q: 'On June 30, 2012, a leap second hung many applications simultaneously (a Linux kernel bug). Why do software errors do more damage than hardware faults?',
+          options: [
+            'Software bugs only run on the newest nodes, so they spread during upgrades',
+            'Software errors run hotter and physically damage the hardware',
+            'Hardware faults are random and independent; software errors are systematic — the same bug on every node, triggered by the same input — so they’re correlated',
+            'They don’t — hardware faults actually cause more total outages'
+          ],
+          answer: 2,
+          why: 'Hardware faults are random and independent; software errors are systematic — the same bug on every node, triggered by the same input. Correlated failures take down everything at once.'
+        },
+        {
+          q: 'One study of large internet services found the leading cause of outages was:',
+          options: [
+            'Hardware faults',
+            'Network partitions',
+            'Configuration errors — hardware played a role in only 10–25% of outages',
+            'Power grid blackouts'
+          ],
+          answer: 2,
+          why: 'Configuration errors — humans are the leading fault source. Hardware played a role in only 10–25%. Design for the assumption that people will make mistakes.'
+        },
+        {
+          q: 'Latency vs. response time — which statement is correct?',
+          options: [
+            'They are exact synonyms in every context',
+            'Response time is what the client sees (service time + network + queueing delays); latency is how long a request waits before being handled',
+            'Latency is what the client sees; response time is purely internal to the server',
+            'Latency only exists in batch systems; response time only exists online'
+          ],
+          answer: 1,
+          why: 'Response time = what the client sees: service time plus network delays plus queueing. Latency (strictly) is how long a request waits, latent, before being worked on.'
+        },
+        {
+          q: 'You need the p95 across 100 servers. Averaging the 100 per-server p95 values is:',
+          options: [
+            'Fine — percentiles are linear and combine by averaging',
+            'Mathematically meaningless — you aggregate by adding the underlying histograms and taking the quantile of the sum',
+            'Required by the SLA definition of p95',
+            'Equivalent to computing the global median'
+          ],
+          answer: 1,
+          why: 'Averaging percentiles is mathematically meaningless — quantiles don’t combine that way. Add histograms (per time window) and take the quantile of the aggregate.'
+        },
+        {
+          q: 'Server-side dashboards show healthy p99, but users complain pages are slow. Why does the book insist response time be measured on the client side?',
+          options: [
+            'Because server clocks drift more than client clocks',
+            'Because clients measure latency and servers measure response time, and latency is the worse of the two',
+            'Because of head-of-line blocking — a few slow requests hold up others behind them, and client-side measurement sees the queues users actually experience',
+            'Because client-side measurement is cheaper at scale'
+          ],
+          answer: 2,
+          why: 'Head-of-line blocking: a server processes limited things in parallel, so slow requests hold up subsequent ones — invisible at the server, very visible from the client.'
+        },
+        {
+          q: '“Just use the architecture that worked for Twitter” fails as advice because:',
+          options: [
+            'Twitter’s architecture is proprietary and patented',
+            'It only works at exactly 4.6k tweets/sec',
+            'There is no magic scaling sauce — the right architecture depends on which load parameters dominate: read volume, write volume, data size, complexity, latency, access patterns',
+            'Modern hardware made distributed architectures obsolete'
+          ],
+          answer: 2,
+          why: 'No one-size-fits-all scalable architecture exists. It depends on which load parameters dominate — and architectures built on wrong load assumptions waste effort or actively backfire.'
+        },
+        {
+          q: 'Moseley & Marks (“Out of the Tar Pit”) draw which distinction?',
+          options: [
+            'Essential complexity (inherent in the problem) vs. accidental complexity (only in the implementation) — simplicity removes the accidental kind',
+            'Simple code (few lines) vs. complex code (many lines)',
+            'Legacy systems (always complex) vs. greenfield systems (always simple)',
+            'Compile-time complexity vs. runtime complexity'
+          ],
+          answer: 0,
+          why: 'Essential complexity is inherent to the problem; accidental complexity exists only in the implementation. Simplifying doesn’t remove functionality — it removes accidental complexity.'
+        },
+        {
+          q: 'A service declares: “up if median < 200 ms, p99 < 1 s, and available ≥ 99.9% of the time.” What is this, in the book’s vocabulary?',
+          options: [
+            'An SLA — customers can demand refunds when it’s missed',
+            'An SLO — the expected performance target; the SLA is the contractual version of it',
+            'A load parameter',
+            'A quorum condition'
+          ],
+          answer: 1,
+          why: 'An SLO (service level objective) is the expected performance/availability target. The SLA (service level agreement) is its contractual form — the one customers can demand refunds for.'
+        }
+      ]
+    };
+  </script>
+  <script src="../js/shared.js"></script>
+  <script src="../js/quiz.js"></script>
+  <script src="../js/toc.js"></script>
+  <script>
+    /* Figure 1-4: 100 request bars, median/p95 markers, hover readout */
+    (function () {
+      var host = document.getElementById('fig14-bars');
+      var readout = document.getElementById('fig14-readout');
+      if (!host) return;
+
+      var seed = 42;
+      function rnd() { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; }
+
+      var times = [];
+      for (var i = 0; i < 100; i++) {
+        var r = rnd(), t;
+        if (r < 0.70) t = 8 + rnd() * 110;          /* fast */
+        else if (r < 0.90) t = 120 + rnd() * 480;   /* slow-ish */
+        else if (r < 0.98) t = 600 + rnd() * 1900;  /* tail */
+        else t = 2500 + rnd() * 6500;               /* extreme outliers */
+        times.push(Math.round(t));
+      }
+
+      var sorted = times.slice().sort(function (a, b) { return a - b; });
+      var median = sorted[49], p95 = sorted[94], max = sorted[99];
+
+      function scaleY(t) { return Math.sqrt(t / max) * 100; } /* sqrt scale so small bars stay visible */
+
+      var frag = document.createDocumentFragment();
+      times.forEach(function (t, i) {
+        var b = document.createElement('div');
+        b.className = 'fbar' + (t > p95 ? ' slow' : '');
+        b.style.height = scaleY(t) + '%';
+        b.setAttribute('role', 'img');
+        b.setAttribute('aria-label', 'request ' + (i + 1) + ': ' + t + ' ms');
+        b.addEventListener('mouseenter', function () {
+          readout.textContent = 'request #' + (i + 1) + ' — ' + t + ' ms' + (t > p95 ? '  · tail!' : '');
+        });
+        frag.appendChild(b);
+      });
+      host.appendChild(frag);
+
+      function marker(value, label, cls) {
+        var m = document.createElement('div');
+        m.className = 'fig-marker' + (cls ? ' ' + cls : '');
+        m.style.bottom = scaleY(value) + '%';
+        var l = document.createElement('span');
+        l.className = 'fig-marker-label';
+        l.textContent = label + ' ' + value + ' ms';
+        m.appendChild(l);
+        host.appendChild(m);
+      }
+      marker(median, 'median', 'med');
+      marker(p95, 'p95', '');
+    })();
+
+    /* Figure 1-5: one page load -> 25 backend calls, one slow */
+    (function () {
+      var host = document.getElementById('fig15-calls');
+      if (!host) return;
+      var slowAt = 14; /* deterministic sample */
+      for (var i = 1; i <= 25; i++) {
+        var c = document.createElement('div');
+        c.className = 'call-chip ' + (i === slowAt ? 'slow' : 'fast');
+        c.textContent = 'call ' + i + (i === slowAt ? ' · 4.1s' : '');
+        host.appendChild(c);
+      }
+    })();
+  </script>
+</body>
+</html>

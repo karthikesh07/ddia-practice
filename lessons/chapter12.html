@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chapter 12 · The Future of Data Systems — DDIA Practice</title>
+  <meta name="description" content="A comprehensive study guide to Chapter 12 of Designing Data-Intensive Applications: data integration and composing specialized tools, the lambda architecture and its problems, unifying batch and stream processing, unbundling the database, federated databases versus unbundled writes, designing applications around dataflow, derived state, write path and read path, materialized views and caching, end-to-end arguments and exactly-once semantics, operation identifiers, enforcing constraints without distributed transactions, timeliness versus integrity, coordination-avoiding data systems, auditing and Merkle trees, and the ethics of predictive analytics, surveillance, privacy, and data as a liability.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d14'/%3E%3Cpath d='M16 6l9 10-9 10-9-10z' fill='%23f0b35c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Spline+Sans:wght@300..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
+  
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-active="lessons" class="is-lesson">
+
+  <div class="reading-progress" id="readingProgress" aria-hidden="true"></div>
+
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="../index.html">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <rect x="1" y="2" width="16" height="4" rx="1.5" stroke="#f0b35c" stroke-width="1.6"/>
+          <rect x="1" y="7" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+          <rect x="1" y="12" width="16" height="4" rx="1.5" stroke="#8d97ad" stroke-width="1.6"/>
+        </svg>
+        DDIA&nbsp;<span class="dim">/ practice</span>
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="../index.html" data-nav="home">Home</a>
+        <a href="../index.html#lessons" data-nav="lessons">Lessons</a>
+        <a href="../flashcards.html" data-nav="flashcards">Flashcards</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+
+    <div class="lesson-hero">
+      <span class="lesson-hero-num" aria-hidden="true">12</span>
+      <div class="container">
+        <a class="crumb" href="../index.html#lessons">← All chapters</a>
+        <p class="kicker">Chapter 12 <span class="dim">· Part III — Derived Data · the finale</span></p>
+        <h1>The Future of Data Systems</h1>
+        <p class="lede">Eleven chapters of machinery, one question: how should the pieces fit together? The answer runs from composing specialized tools via logs, through taking the database apart, to correctness end-to-end — and ends with the ethics of what we build.</p>
+        <div class="lesson-meta">
+          <span class="chip">Data integration</span>
+          <span class="chip">Unbundling</span>
+          <span class="chip">End-to-end correctness</span>
+          <span class="chip">Ethics</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pullquote container">
+      <p>“If the highest aim of a captain was to preserve his ship, he would keep it in port forever.”</p>
+      <cite>— St. Thomas Aquinas, Summa Theologica (1265–1274), the chapter’s epigraph — systems exist to serve a purpose beyond their own preservation</cite>
+    </div>
+
+    <div class="chapter-layout container">
+
+      <aside class="toc" aria-label="Chapter contents">
+        <p class="toc-title">Ch 12 contents</p>
+        <ul>
+          <li><a href="#s-intro">12.0 The view from the end</a></li>
+          <li><a href="#s-integration">12.1 Data integration</a></li>
+          <li><a href="#s-onetool" class="sub">One tool, many jobs</a></li>
+          <li><a href="#s-dataflows" class="sub">Reasoning about dataflows</a></li>
+          <li><a href="#s-ddvsdt" class="sub">Derived data vs 2PC</a></li>
+          <li><a href="#s-totalorder" class="sub">Limits of total order</a></li>
+          <li><a href="#s-causality" class="sub">Capturing causality</a></li>
+          <li><a href="#s-evolution" class="sub">Reprocessing for evolution</a></li>
+          <li><a href="#s-lambda" class="sub">The lambda architecture</a></li>
+          <li><a href="#s-unifying" class="sub">Unifying batch &amp; stream</a></li>
+          <li><a href="#s-unbundling">12.2 Unbundling databases</a></li>
+          <li><a href="#s-philosophies" class="sub">Two philosophies</a></li>
+          <li><a href="#s-createindex" class="sub">CREATE INDEX, reprocessed</a></li>
+          <li><a href="#s-metadatabase" class="sub">The meta-database of everything</a></li>
+          <li><a href="#s-federated" class="sub">Federated vs unbundled</a></li>
+          <li><a href="#s-makingitwork" class="sub">Making unbundling work</a></li>
+          <li><a href="#s-missing" class="sub">What’s missing</a></li>
+          <li><a href="#s-dataflow" class="sub">Applications around dataflow</a></li>
+          <li><a href="#s-services" class="sub">Stream processors &amp; services</a></li>
+          <li><a href="#s-writepath" class="sub">The write path</a></li>
+          <li><a href="#s-readpath" class="sub">The read path &amp; views</a></li>
+          <li><a href="#s-offline" class="sub">Offline-capable clients</a></li>
+          <li><a href="#s-readevents" class="sub">Reads are events too</a></li>
+          <li><a href="#s-multipartition" class="sub">Multi-partition processing</a></li>
+          <li><a href="#s-correctness">12.3 Aiming for correctness</a></li>
+          <li><a href="#s-e2eonce" class="sub">Exactly-once, end-to-end</a></li>
+          <li><a href="#s-opids" class="sub">Operation identifiers</a></li>
+          <li><a href="#s-e2eargument" class="sub">The end-to-end argument</a></li>
+          <li><a href="#s-constraints" class="sub">Enforcing constraints</a></li>
+          <li><a href="#s-loguniqueness" class="sub">Uniqueness via logs</a></li>
+          <li><a href="#s-multipartreq" class="sub">Multi-partition requests</a></li>
+          <li><a href="#s-timeliness" class="sub">Timeliness vs integrity</a></li>
+          <li><a href="#s-loose" class="sub">Loosely interpreted constraints</a></li>
+          <li><a href="#s-verify" class="sub">Trust, but verify</a></li>
+          <li><a href="#s-audit" class="sub">Designing for auditability</a></li>
+          <li><a href="#s-ethics">12.4 Doing the right thing</a></li>
+          <li><a href="#s-predictive" class="sub">Predictive analytics</a></li>
+          <li><a href="#s-bias" class="sub">Bias &amp; accountability</a></li>
+          <li><a href="#s-surveillance" class="sub">Surveillance</a></li>
+          <li><a href="#s-consent" class="sub">Consent &amp; freedom of choice</a></li>
+          <li><a href="#s-decisionright" class="sub">Privacy as a decision right</a></li>
+          <li><a href="#s-toxic" class="sub">Data as a toxic asset</a></li>
+          <li><a href="#s-industrial" class="sub">The industrial parallel</a></li>
+          <li><a href="#s-summary">12.5 Summary &amp; glossary</a></li>
+          <li><a href="#quiz-section">Quiz</a></li>
+        </ul>
+      </aside>
+
+      <div class="lesson-body">
+
+        <!-- ================= 12.0 ================= -->
+        <section class="block reveal" id="s-intro">
+          <p class="kicker">12.0 <span class="dim">·</span> The view from the end</p>
+          <h2>The view from the end</h2>
+          <p>So far this book has mostly described things as they are. In this final chapter the perspective shifts toward how things <em>should</em> be — the author proposes approaches that may fundamentally improve how we design and build applications. Opinions about the future are subjective, so the chapter is written in the first person; you are welcome to disagree. The goal from Chapter 1 still applies — reliable, scalable, maintainable applications — and this chapter brings those threads together to aim at something more: applications that are <strong>robust, correct, evolvable, and ultimately beneficial to humanity</strong>.</p>
+          <p>The plan comes in four movements. First, <strong>data integration</strong>: since no single tool fits all needs, how do the pieces fit together? Second, <strong>unbundling the database</strong>: the observation that batch and stream processors, message brokers, and search indexes are re-implementing the internals of a database as standalone tools — and what it would mean to compose them deliberately. Third, <strong>aiming for correctness</strong>: why the guarantees of transactions and consensus are not enough at application level, and what end-to-end reasoning looks like. And fourth, <strong>doing the right thing</strong>: the ethics of building data systems at all.</p>
+        </section>
+
+        <!-- ================= 12.1 ================= -->
+        <section class="block reveal" id="s-integration">
+          <p class="kicker">12.1 <span class="dim">·</span> Making the pieces fit</p>
+          <h2>Data integration</h2>
+
+          <h3 id="s-onetool">12.1.1 — One tool, many jobs</h3>
+          <p>A recurring theme of the book: for any given problem there are several solutions, all with different pros, cons, and trade-offs. Storage engines — log-structured, B-trees, column-oriented. Replication — single-leader, multi-leader, leaderless. For “I want to store some data and look it up again later,” there is no one right answer, only approaches appropriate to different circumstances. A software implementation has to pick one — and it’s hard enough to get <em>one</em> code path robust and performing well; trying to do everything in one piece of software almost guarantees the implementation will be poor. Every piece of software, even a so-called “general-purpose” database, is designed for a particular usage pattern.</p>
+          <p>Vendors are understandably reluctant to tell you which workloads their software is poorly suited for, but the previous chapters should have equipped you with questions to read between the lines. And there is a second challenge beyond understanding the tool-to-circumstances mapping: in complex applications, data is used in <em>several different ways</em>, so you inevitably end up cobbling together several pieces of software. It is common, for example, to integrate an OLTP database with a full-text search index — some databases like PostgreSQL include full-text indexing, which can suffice for simple applications, but more sophisticated search needs specialist information-retrieval tools; conversely, search indexes are generally poor as a durable system of record. Beyond database plus search index: analytics systems (warehouses, batch and stream processors), caches and denormalized derived objects, machine learning and ranking and recommendation systems, notifications triggered by data changes.</p>
+          <div class="callout note">
+            <p class="callout-title">“99% of people only need X”</p>
+            <p>The author keeps seeing engineers say things like “in my experience, 99% of people only need X” (or “…don’t need X”), for various values of X. Such statements say more about the experience of the speaker than about the usefulness of a technology. The range of things you might want to do with data is dizzyingly wide; what one person considers an obscure, pointless feature may be a central requirement for someone else. The need for data integration often only becomes apparent when you zoom out and consider the dataflows across an entire organization — not one application.</p>
+          </div>
+
+          <h3 id="s-dataflows">12.1.2 — Reasoning about dataflows</h3>
+          <p>When copies of the same data live in several storage systems, you need to be very clear about inputs and outputs: where is data written first, and which representations are derived from which sources? The disciplined arrangement: data is first written to a <strong>system of record</strong> database, its changes captured (Chapter 11’s CDC), and the changes applied to the search index <strong>in the same order</strong>. If CDC is the <em>only</em> way the index is updated, you can be confident the index is entirely derived from the system of record and therefore consistent with it (barring bugs) — writing to the database is the only way new input enters the system. Let the application write directly to both, and you are back in Chapter 11’s dual-writes disaster: neither system is “in charge” of ordering, so they can make contradictory decisions and become permanently inconsistent.</p>
+          <p>Funnel all user input through a single system that decides on an ordering for all writes, and deriving other representations becomes much easier — an application of <strong>state machine replication</strong> from Chapter 9. Whether you use CDC or an event sourcing log matters less than the principle of deciding on a total order. And updating a derived system from an event log can often be made <strong>deterministic and idempotent</strong>, which makes recovery from faults easy.</p>
+
+          <h3 id="s-ddvsdt">12.1.3 — Derived data versus distributed transactions</h3>
+          <p>The classic approach to keeping data systems consistent is distributed transactions (2PC, Chapter 9). How does log-based derived data compare? At an abstract level they achieve a similar goal by different means: <strong>distributed transactions decide on an ordering of writes using locks for mutual exclusion; CDC and event sourcing use a log for ordering. Distributed transactions use atomic commit to ensure changes take effect exactly once; log-based systems rely on deterministic retry and idempotence.</strong> The biggest difference: transaction systems usually provide linearizability, with useful guarantees like reading your own writes, whereas derived data systems are updated asynchronously and don’t by default offer those timing guarantees.</p>
+          <p>Within limited environments willing to pay the cost, distributed transactions have worked. But XA has poor fault tolerance and performance characteristics that severely limit its usefulness, and even if a better protocol existed, getting it widely adopted and integrated with existing tools would be unlikely to happen soon. In the absence of a good distributed transaction protocol, <strong>log-based derived data is the most promising approach for integrating different data systems</strong> — though “eventual consistency is inevitable, suck it up” is not a productive message without guidance. The rest of this chapter works toward a middle ground between distributed transactions and asynchronous log-based systems.</p>
+
+          <h3 id="s-totalorder">12.1.4 — The limits of total ordering</h3>
+          <p>For systems small enough, constructing a totally ordered event log is entirely feasible — single-leader databases do exactly that. But scale up, and limitations emerge:</p>
+          <ul class="checklist">
+            <li><strong>Single-leader throughput.</strong> A totally ordered log requires all events to pass through a single leader node. If event throughput exceeds one machine, you partition across machines — and then the order of events in two different partitions is ambiguous.</li>
+            <li><strong>Multiple datacenters.</strong> To tolerate a datacenter going offline, you typically run a leader per datacenter (synchronous cross-datacenter coordination is too slow) — so events originating in different datacenters have undefined relative order.</li>
+            <li><strong>Microservices.</strong> A common choice is deploying each service and its durable state independently, with no shared state — when two events originate in different services, there is no defined order for them.</li>
+            <li><strong>Client-side state.</strong> Applications that update immediately on user input and work offline make clients and servers very likely to see events in different orders.</li>
+          </ul>
+          <p>Deciding a total order of events is formally <strong>total order broadcast, which is equivalent to consensus</strong> — and most consensus algorithms are designed for cases where a single node’s throughput suffices, with no mechanism for multiple nodes to share the ordering work. Designing consensus algorithms that scale beyond a single node and work well geographically distributed is an open research problem.</p>
+
+          <h3 id="s-causality">12.1.5 — Ordering events to capture causality</h3>
+          <p>Where there is no causal link between events, lack of total order is not a big problem — concurrent events can be ordered arbitrarily, and multiple updates of the same object can be totally ordered by routing all updates for an object ID to the same log partition. But causal dependencies sometimes arise subtly. The chapter’s example: two users break up; one removes the other as a friend and then sends a message complaining about the ex — intending the ex never sees it. In a system storing friendship status in one place and messages in another, the ordering dependency between the <em>unfriend</em> event and the <em>message-send</em> event may be lost: a notification service (effectively a join between messages and the friend list — Chapter 11’s time-dependent joins again) may process the message before the unfriend and wrongly notify the ex. There is no simple answer; starting points include <strong>logical timestamps</strong> (total ordering without coordination, but recipients must handle out-of-order delivery and carry extra metadata), <strong>logging an event recording the state the user saw before deciding</strong> (later events reference that event ID to record the causal dependency), and <strong>conflict resolution algorithms</strong> (helpful for maintaining state, but useless for actions with external side effects like sending a notification).</p>
+
+          <h3 id="s-batchstream">12.1.6 — Batch and stream processing</h3>
+          <p>The goal of data integration is making sure data ends up in the right form in all the right places — consuming inputs, transforming, joining, filtering, aggregating, training models, and writing to the appropriate outputs. Batch and stream processors are the tools for that job; their outputs are the derived datasets (search indexes, materialized views, recommendations, aggregate metrics). The two share most principles, and the main fundamental difference — bounded versus unbounded input — is blurring in the engines: <strong>Spark performs stream processing on top of a batch engine by breaking the stream into microbatches, while Flink performs batch processing on top of a stream engine</strong>. One type of processing can emulate the other, though performance characteristics vary (microbatching may perform poorly on hopping or sliding windows).</p>
+          <p>Both have a strongly functional flavor: deterministic, pure functions whose output depends only on the input, no side effects beyond explicit outputs, inputs immutable, outputs append-only — stream processing extends this with managed, fault-tolerant operator state. That discipline is not just for fault tolerance; it simplifies reasoning about an organization’s dataflows: whatever the derived data — search index, statistical model, or cache — think in terms of pipelines that derive one thing from another, pushing state changes through functional application code into derived systems. Note what asynchrony buys here: it is what makes event-log systems robust, because <strong>a fault in one part of the system is contained locally, whereas distributed transactions abort if any participant fails, tending to amplify failures by spreading them</strong>. Even cross-partition secondary indexes (Chapter 6) are more reliably and scalably maintained asynchronously.</p>
+
+          <h3 id="s-evolution">12.1.7 — Reprocessing data for application evolution</h3>
+          <p>Stream processing reflects input changes in derived views with low delay; batch processing chews through accumulated history to derive <em>new</em> views onto an existing dataset. Both are useful, and reprocessing existing data is a powerful mechanism for <strong>maintaining and evolving a system</strong>. Without reprocessing, schema evolution is limited to simple changes — adding an optional field, adding a new record type — whether schema-on-write or schema-on-read. With reprocessing, you can restructure a dataset into a completely different model to serve new requirements.</p>
+          <div class="callout story">
+            <p class="callout-title">Schema migrations on railways</p>
+            <p>Large-scale “schema migrations” happen outside computers too. Early 19th-century England had competing railway <em>gauges</em> — the distance between the rails — and trains built for one gauge couldn’t run on another. After a standard gauge was decided in 1846, existing tracks had to convert — without shutting the line down for years. The solution: convert to <strong>dual gauge</strong> by adding a third rail, gradually; both kinds of trains run on two of the three rails; once all the trains are converted, the extra rail comes out. Expensive enough that nonstandard gauges survive today (BART in the San Francisco Bay Area uses a different gauge from most of the US). “Reprocessing” the tracks while old and new coexist is exactly the software pattern.</p>
+          </div>
+          <p>Derived views allow <strong>gradual</strong> evolution: maintain the old schema and the new as two independently derived views onto the same underlying data; shift a small number of users to the new view to test performance and find bugs while most still use the old; gradually increase the proportion; eventually drop the old view. Every stage is easily reversible — you always have a working system to go back to, and reducing the risk of irreversible damage lets you move <em> faster</em>.</p>
+
+          <h3 id="s-lambda">12.1.8 — The lambda architecture</h3>
+          <p>If batch processing reprocesses historical data and stream processing handles recent updates, how do you combine them? The <strong>lambda architecture</strong> is the influential proposal: incoming data is recorded as immutable events appended to an always-growing dataset (like event sourcing); read-optimized views are derived from those events by <strong>two different systems running in parallel</strong> — a batch system (Hadoop MapReduce) and a separate stream system (Storm). The stream processor consumes events and quickly produces an <strong>approximate</strong> update to the view; the batch processor later consumes the <em>same</em> events and produces a <strong>corrected</strong> version. The reasoning: batch processing is simpler and thus less prone to bugs, stream processors are thought less reliable and harder to make fault-tolerant, and the stream side can use fast approximate algorithms while the batch side uses slower exact ones.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 12-A (recreated) · The lambda architecture</p>
+            <svg viewBox="0 0 780 400" role="img" aria-label="Immutable events flow into both a speed layer (stream processor producing fast approximate views) and a batch layer (reprocessing all history into corrected views); a serving layer must merge the two outputs to answer queries" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr12a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+                <marker id="arr12b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="10">
+                <rect x="280" y="30" width="220" height="52" rx="10" fill="#1a2133" stroke="#f0b35c" stroke-width="1.4"/>
+                <text x="390" y="50" text-anchor="middle" fill="#f0b35c">IMMUTABLE EVENTS</text>
+                <text x="390" y="66" text-anchor="middle" fill="#636d83" font-size="9">append-only, ever-growing</text>
+                <rect x="60" y="150" width="300" height="66" rx="10" fill="rgba(99,223,194,0.07)" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="210" y="170" text-anchor="middle" fill="#63dfc2">SPEED LAYER — stream processor</text>
+                <text x="210" y="186" text-anchor="middle" fill="#8d97ad" font-size="9">Storm: consumes events now,</text>
+                <text x="210" y="200" text-anchor="middle" fill="#8d97ad" font-size="9">fast APPROXIMATE view updates</text>
+                <rect x="420" y="150" width="300" height="66" rx="10" fill="rgba(240,179,92,0.07)" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="570" y="170" text-anchor="middle" fill="#f0b35c">BATCH LAYER — reprocess everything</text>
+                <text x="570" y="186" text-anchor="middle" fill="#8d97ad" font-size="9">MapReduce: same events, later,</text>
+                <text x="570" y="200" text-anchor="middle" fill="#8d97ad" font-size="9">slower EXACT corrected views</text>
+                <line x1="330" y1="82" x2="230" y2="148" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr12b)"/>
+                <line x1="450" y1="82" x2="550" y2="148" stroke="#f0b35c" stroke-width="1.5" marker-end="url(#arr12a)"/>
+                <text x="180" y="120" fill="#63dfc2" font-size="9">as events arrive</text>
+                <text x="600" y="120" fill="#f0b35c" font-size="9">reperiodically</text>
+                <rect x="200" y="280" width="380" height="56" rx="10" fill="#151c30" stroke="#2b3859" stroke-width="1.4"/>
+                <text x="390" y="300" text-anchor="middle" fill="#d9e0ee">SERVING LAYER — merge batch + stream outputs</text>
+                <text x="390" y="318" text-anchor="middle" fill="#636d83" font-size="9">easy for simple tumbling-window aggregates…</text>
+                <line x1="210" y1="216" x2="300" y2="278" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr12b)"/>
+                <line x1="570" y1="216" x2="480" y2="278" stroke="#f0b35c" stroke-width="1.5" marker-end="url(#arr12a)"/>
+                <rect x="90" y="352" width="600" height="34" rx="8" fill="rgba(239,128,128,0.07)" stroke="#ef8080" stroke-dasharray="5 4"/>
+                <text x="390" y="373" text-anchor="middle" fill="#ef8080" font-size="9.5">the catch: TWO systems to build, debug, tune, and keep in sync — and a reconciliation to write</text>
+              </g>
+            </svg>
+            <p class="fig-caption">The lambda architecture was genuinely influential — it popularized the principle of deriving views from immutable event streams and reprocessing events when needed. But its practical problems are serious. <strong>Two codebases:</strong> the same logic must run in both a batch and a streaming framework; libraries like Summingbird abstract over both, but the operational complexity of debugging, tuning, and maintaining two different systems remains. <strong>The reconciliation:</strong> stream and batch pipelines produce separate outputs that must be merged to answer user requests — fairly easy if the computation is a simple aggregation over a tumbling window, significantly harder for joins, sessionization, or outputs that aren’t time series. <strong>The reprocessing cost:</strong> reprocessing the entire history is expensive on large datasets, so the batch pipeline usually processes incremental batches (an hour’s worth per hour) — which reintroduces stragglers and boundary-crossing windows, making the batch layer more like the streaming layer, counter to the goal of keeping it simple.</p>
+          </div>
+
+          <h3 id="s-unifying">12.1.9 — Unifying batch and stream processing</h3>
+          <p>More recent work delivers the lambda architecture’s benefits without its downsides, by running <strong>both</strong> batch computations (reprocessing history) and stream computations (processing events as they arrive) in the <strong>same system</strong>. Unification requires three features, increasingly widely available:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Replay through the same engine</h4><p>Historical events replayable through the same processing engine that handles recent events — log-based brokers can replay messages, and some stream processors read input directly from HDFS.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Exactly-once for streams</h4><p>The output must be the same as if no faults occurred even when they did — Chapter 11’s microbatching, checkpointing, and atomic-commit machinery, discarding the partial output of failed tasks.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Windowing by event time</h4><p>Not processing time — processing time is meaningless when reprocessing historical events. Apache Beam provides an API for such computations, runnable on Flink or Google Cloud Dataflow.</p></div></div>
+          </div>
+        </section>
+        <!-- ================= 12.2 ================= -->
+        <section class="block reveal" id="s-unbundling">
+          <p class="kicker">12.2 <span class="dim">·</span> The database, taken apart</p>
+          <h2>Unbundling databases</h2>
+
+          <h3 id="s-philosophies">12.2.1 — Two philosophies of information management</h3>
+          <p>At the most abstract level, databases, Hadoop, and operating systems do the same things: store some data, and let you process and query it. A database stores records of some data model (rows, documents, vertices); an OS filesystem stores files — but both are “information management” systems, and the Hadoop ecosystem is somewhat like a distributed Unix. There are practical differences (many filesystems cope poorly with a directory of 10 million small files; a database with 10 million small records is unremarkable), but the more interesting difference is philosophical. <strong>Unix</strong> presented programmers with a logical but fairly low-level hardware abstraction; <strong>relational databases</strong> wanted to hide the complexities of on-disk structures, concurrency, and crash recovery behind a high-level abstraction. Unix developed pipes and files that are just byte sequences; databases developed SQL and transactions. Which is “simpler” depends on what you want: Unix is a thin wrapper around hardware; a database lets a short declarative query draw on query optimization, indexes, join methods, concurrency control, and replication without understanding any of them. The tension has lasted since both emerged in the early 1970s — the NoSQL movement, read this way, was the Unix-esque low-level approach applied to distributed OLTP. This section tries to reconcile the philosophies.</p>
+
+          <h3 id="s-createindex">12.2.2 — Creating an index, reprocessed</h3>
+          <p>Over the book we have examined database features — secondary indexes, materialized views, replication logs, full-text search indexes — and Chapters 10–11 kept re-encountering their shadows outside the database: batch jobs building search indexes, stream processors maintaining materialized views, CDC replicating changes into derived systems. The parallels are exact, and <code>CREATE INDEX</code> shows how exact. What happens when you create a new index in a relational database? It scans a <strong>consistent snapshot</strong> of the table, picks out the indexed field values, sorts them, writes the index — then processes the <strong>backlog of writes</strong> made since the snapshot (the table wasn’t locked) — then keeps the index up to date as transactions write. That is remarkably similar to setting up a <strong>new follower replica</strong>, and very similar to bootstrapping <strong>CDC</strong> with an initial snapshot: whenever you run CREATE INDEX, the database essentially reprocesses the existing dataset and derives the index as a new view onto existing data. The existing data is a snapshot rather than a log of all changes — but Chapter 11 showed how closely the two are related.</p>
+
+          <h3 id="s-metadatabase">12.2.3 — The meta-database of everything</h3>
+          <p>In this light, the dataflow across an entire organization starts looking like <strong>one huge database</strong>. Whenever a batch, stream, or ETL process transports data from one place and form to another, it acts like the database subsystem that keeps indexes or materialized views up to date. Batch and stream processors are elaborate implementations of triggers, stored procedures, and materialized view maintenance; the derived data systems they maintain are like different index types (a relational database supports B-tree, hash, spatial indexes — the unbundled equivalent is Elasticsearch here, a recommendation system there). The difference: instead of those facilities living inside one integrated database product, they are provided by various pieces of software, running on different machines, administered by different teams.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 12-B (recreated) · Unbundling: database internals as standalone tools</p>
+            <svg viewBox="0 0 780 430" role="img" aria-label="Left: inside a database — transaction log, secondary index, materialized view, query engine. Right: the same functions as standalone tools — Kafka as the log, Elasticsearch as the index, Spark and Flink pipelines maintaining materialized views, application code and federated query engines as the query engine" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr12c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+                <marker id="arr12d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="10">
+                <rect x="30" y="60" width="320" height="310" rx="12" fill="#151c30" stroke="#2b3859" stroke-width="1.5"/>
+                <text x="190" y="46" text-anchor="middle" fill="#8d97ad">INSIDE THE DATABASE</text>
+                <rect x="60" y="84" width="260" height="46" rx="8" fill="#1a2133" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="190" y="103" text-anchor="middle" fill="#f0b35c">transaction log (WAL)</text>
+                <text x="190" y="119" text-anchor="middle" fill="#636d83" font-size="8.5">the record of what happened</text>
+                <rect x="60" y="142" width="260" height="46" rx="8" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="190" y="161" text-anchor="middle" fill="#d9e0ee">secondary / full-text indexes</text>
+                <text x="190" y="177" text-anchor="middle" fill="#636d83" font-size="8.5">sorted structures derived from the log</text>
+                <rect x="60" y="200" width="260" height="46" rx="8" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="190" y="219" text-anchor="middle" fill="#d9e0ee">materialized views</text>
+                <text x="190" y="235" text-anchor="middle" fill="#636d83" font-size="8.5">precomputed caches of query results</text>
+                <rect x="60" y="258" width="260" height="46" rx="8" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="190" y="277" text-anchor="middle" fill="#d9e0ee">replication log</text>
+                <text x="190" y="293" text-anchor="middle" fill="#636d83" font-size="8.5">keeps follower copies up to date</text>
+                <rect x="60" y="316" width="260" height="46" rx="8" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="190" y="335" text-anchor="middle" fill="#d9e0ee">query engine</text>
+                <text x="190" y="351" text-anchor="middle" fill="#636d83" font-size="8.5">declarative, optimized, one integrated product</text>
+                <rect x="430" y="60" width="320" height="310" rx="12" fill="#151c30" stroke="#2b3859" stroke-width="1.5"/>
+                <text x="590" y="46" text-anchor="middle" fill="#8d97ad">STANDING ALONE</text>
+                <rect x="460" y="84" width="260" height="46" rx="8" fill="#1a2133" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="590" y="103" text-anchor="middle" fill="#f0b35c">Kafka — the log</text>
+                <text x="590" y="119" text-anchor="middle" fill="#636d83" font-size="8.5">durable, partitioned, replayable</text>
+                <rect x="460" y="142" width="260" height="46" rx="8" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="590" y="161" text-anchor="middle" fill="#d9e0ee">Elasticsearch — the index</text>
+                <text x="590" y="177" text-anchor="middle" fill="#636d83" font-size="8.5">kept current via CDC, not app writes</text>
+                <rect x="460" y="200" width="260" height="46" rx="8" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="590" y="219" text-anchor="middle" fill="#d9e0ee">Spark / Flink pipelines — view maintenance</text>
+                <text x="590" y="235" text-anchor="middle" fill="#636d83" font-size="8.5">“turning the crank” on derived state</text>
+                <rect x="460" y="258" width="260" height="46" rx="8" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="590" y="277" text-anchor="middle" fill="#d9e0ee">Redis / caches — derived replicas</text>
+                <text x="590" y="293" text-anchor="middle" fill="#636d83" font-size="8.5">fed from the changelog</text>
+                <rect x="460" y="316" width="260" height="46" rx="8" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="590" y="335" text-anchor="middle" fill="#d9e0ee">application code + federated queries</text>
+                <text x="590" y="351" text-anchor="middle" fill="#636d83" font-size="8.5">the query engine, distributed across teams</text>
+                <line x1="320" y1="107" x2="458" y2="107" stroke="#f0b35c" stroke-width="1.5" marker-end="url(#arr12c)"/>
+                <line x1="320" y1="165" x2="458" y2="165" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr12d)"/>
+                <line x1="320" y1="223" x2="458" y2="223" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr12d)"/>
+                <line x1="320" y1="281" x2="458" y2="281" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr12d)"/>
+                <line x1="320" y1="339" x2="458" y2="339" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr12d)"/>
+                <text x="390" y="392" text-anchor="middle" fill="#636d83" font-size="9.5">unbundling = compose systems from the standalone pieces via derived data — CDC and event logs for writes, federation for reads</text>
+              </g>
+            </svg>
+            <p class="fig-caption">Two avenues compose storage and processing tools into a cohesive system. A <strong>federated database (polystore)</strong> unifies reads: one query interface over many underlying storage engines (PostgreSQL’s foreign data wrappers fit the pattern) — the relational tradition of a single integrated system with a high-level query language, elegant semantics, complicated implementation. An <strong>unbundled database</strong> unifies writes: keeping changes flowing reliably to all the right places across disparate technologies — via change data capture and event logs — like the Unix tradition of small tools that do one thing well, communicating through a uniform low-level API (pipes), composed with a higher-level language (the shell).</p>
+          </div>
+
+          <h3 id="s-federated">12.2.4 — Two avenues: federation and unbundling</h3>
+          <p>Federation and unbundling are two sides of the same coin — composing a reliable, scalable, maintainable system out of diverse components. Federated read-only querying requires mapping one data model into another: some thought, but a manageable problem.</p>
+
+          <h3 id="s-makingitwork">12.2.5 — Making unbundling work</h3>
+          <p>Keeping the writes to several storage systems in sync is the harder engineering problem. The traditional approach — distributed transactions across heterogeneous systems — is, in the author’s judgment, the wrong solution: transactions within a single storage or stream processing system are feasible, but across technologies written by different groups, the lack of a standardized transaction protocol makes integration painful. An <strong>asynchronous event log with idempotent consumers</strong> is a much simpler abstraction, and much more feasible across heterogeneous systems. The big advantage of log-based integration is <strong>loose coupling</strong>, on two levels:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>System level — fault containment</h4><p>Asynchronous streams make the whole more robust to outages of individual components: if a consumer runs slow or fails, the event log buffers messages and everyone else continues unaffected; the faulty consumer catches up when fixed, missing nothing. Distributed transactions, being synchronous, tend to escalate local faults into large-scale failures.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Human level — independent teams</h4><p>Different components and services can be developed, improved, and maintained independently by different teams. Specialization lets each team focus on doing one thing well with well-defined interfaces; event logs are powerful enough to capture strong consistency properties (durability and ordering of events) yet general enough for almost any kind of data.</p></div></div>
+          </div>
+          <p>Unbundling is not a replacement for databases — they will still be needed as much as ever, for maintaining state in stream processors and for serving queries from the outputs of batch and stream processors. Specialized query engines keep their place too: MPP warehouse engines handle exploratory analytics very well. And the complexity of running several pieces of infrastructure is a real cost — each has a learning curve, configuration, operational quirks, so deploy as few moving parts as possible. A single integrated product may achieve better, more predictable performance on its designed workloads than a composition you build yourself. The goal of unbundling is <strong>not</strong> to beat individual databases at any one workload: it is to combine several databases for good performance across a <em>much wider range of workloads</em> than any single piece of software — <strong>breadth, not depth</strong>. If a single technology does everything you need, you are most likely best off using it; composition only comes into the picture when no single product satisfies all your requirements.</p>
+
+          <h3 id="s-missing">12.2.6 — What’s missing: the unbundled shell</h3>
+          <p>The tools for composing data systems are getting better, but one major piece is missing: <strong>the unbundled-database equivalent of the Unix shell</strong> — a high-level language for composing storage and processing systems simply and declaratively. The dream: declare <code>mysql | elasticsearch</code> by analogy to Unix pipes — the unbundled equivalent of <code>CREATE INDEX</code>, taking all the documents in a MySQL database and indexing them in Elasticsearch, then continually applying every subsequent change automatically, without custom application code. Similarly, it should be possible to precompute and update caches by declaratively specifying materialized views for complex queries — including recursive queries on graphs and application logic. There is interesting early-stage research, such as <strong>differential dataflow</strong>.</p>
+
+          <h3 id="s-dataflow">12.2.7 — Designing applications around dataflow</h3>
+          <p>Composing specialized storage and processing systems with application code is also called the <strong>“database inside-out”</strong> approach — though “new architecture” is too grandiose; it is a design pattern, given a name so we can talk about it. The ideas are amalgamated from others: dataflow languages (Oz, Juttle), functional reactive programming languages (Elm), logic programming (Bloom); the term <em>unbundling</em> in this context was proposed by Jay Kreps. And <strong>spreadsheets have dataflow capabilities miles ahead of most mainstream programming languages</strong>: put a formula in one cell, and whenever any input changes, the result recalculates automatically — exactly what we want at the data-system level: when a record changes, every index, cached view, and aggregation depending on it is automatically refreshed, and you should be able to simply trust that it works. Most data systems still have something to learn from what <strong>VisiCalc had in 1979</strong>; the differences are that data systems also need fault tolerance, scale, durability, and the ability to integrate disparate technologies written by different groups over time.</p>
+          <h4>Application code as a derivation function</h4>
+          <p>When one dataset is derived from another, it goes through a transformation function. A secondary index: pick out the indexed values and sort them. A full-text search index: language detection, word segmentation, stemming, spelling correction, synonym identification, then an inverted index. A machine learning system: the model is derived from training data by feature extraction and statistical analysis. A cache: an aggregation of data in the form the UI will display, requiring knowledge of the UI’s fields. The secondary-index derivation is so standard it is built into databases — <code>CREATE INDEX</code>. Full-text indexing has basic linguistic features built in, but sophisticated features need domain tuning; ML feature engineering is notoriously application-specific. <strong>Where the derivation function is not a standard cookie-cutter, custom code is required — and custom code is where databases struggle.</strong> Triggers, stored procedures, and user-defined functions exist, but they have been an afterthought, and databases turn out to be poorly suited as deployment environments for arbitrary application code: they don’t fit modern requirements like dependency and package management, version control, rolling upgrades, monitoring, metrics, and calls to network services. Deployment and cluster management tools — Mesos, YARN, Docker, Kubernetes — do exactly that one thing, and do it much better. Hence the sensible split: some parts specialize in durable data storage, others in running application code, interacting but independent.</p>
+          <div class="callout story">
+            <p class="callout-title">“The separation of Church and state”</p>
+            <p>Most web applications are deployed as stateless services — any request can go to any server, which forgets everything once it responds; the state goes to a database. The trend keeps stateless application logic separate from state management: not putting application logic in the database, and not putting persistent state in the application. As the functional programming community jokes, <strong>“We believe in the separation of Church and state”</strong> — Church being Alonzo Church, whose lambda calculus has no mutable state. In this model the database is a mutable shared variable accessed synchronously over the network — durable, with some concurrency control and fault tolerance. But you cannot <em>subscribe</em> to changes in a mutable variable; you can only read it periodically. Unlike in a spreadsheet, readers don’t get notified. Databases inherited that passivity: your only option to learn whether content changed is to poll — subscribing to changes is only just emerging as a feature.</p>
+          </div>
+
+          <h3 id="s-services">12.2.8 — Stream processors and services</h3>
+          <p>The trendy style of application development breaks functionality into <strong>services</strong> communicating via synchronous network requests (REST). The advantage over a monolith is organizational scalability through loose coupling — different teams, independent deployment. Composing stream operators into dataflow systems has similar characteristics, but the communication is very different: <strong>one-directional, asynchronous message streams rather than synchronous request/response</strong>. A concrete comparison — a customer purchases an item priced in one currency and paid in another, so you need the current exchange rate:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Microservices approach</h4><p>The purchase-processing code queries an exchange-rate service or database for the current rate.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Dataflow approach</h4><p>The purchase-processing code <em>subscribes</em> to a stream of exchange-rate updates ahead of time and records the current rate in a local database whenever it changes; processing a purchase requires only a query to the local database. A synchronous network request has been replaced by a stream join between purchase events and exchange-rate update events — faster, and more robust to the other service’s failure. <strong>The fastest and most reliable network request is no network request at all.</strong></p></div></div>
+          </div>
+          <p>The join is time-dependent (reprocessing later means the rate has changed — you need the historical rate at purchase time), which both approaches must handle. But subscribing to changes rather than querying current state brings us closer to the spreadsheet model of computation: when data changes, derived data updates swiftly.</p>
+
+          <h3 id="s-writepath">12.2.9 — Observing derived state: the write path</h3>
+          <p>The dataflow systems above give you a process for creating derived datasets and keeping them up to date. Call that process the <strong>write path</strong>: whenever information is written to the system, it may go through multiple stages of batch and stream processing, and eventually every derived dataset is updated to incorporate the write. (Think of updating a search index: document updates flow in, the index entries change.)</p>
+
+          <h3 id="s-readpath">12.2.10 — The read path, and where they meet</h3>
+          <p>But why create the derived dataset at all? Most likely because you want to <strong>query it again later</strong>. That is the <strong>read path</strong>: when serving a user request you read from the derived dataset, perhaps process the results further, and construct the response. Together the two paths cover the whole journey of the data, from where it is collected to where it is consumed (probably by another human): the write path is the portion that is <strong>precomputed — done eagerly as the data comes in, regardless of whether anyone asks to see it</strong>; the read path is the portion that happens <strong>only when someone asks</strong>. If you know functional programming: the write path is eager evaluation; the read path is lazy evaluation.</p>
+
+          <div class="figure">
+            <p class="fig-head">Figure 12-1 (recreated) · Writes and reads meet at the derived state</p>
+            <svg viewBox="0 0 780 360" role="img" aria-label="The write path flows from an event log through stream and batch processing into the derived dataset — the index — while the read path flows from user queries into the same derived dataset; materialized views and caches shift work between the two paths" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr12e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+                <marker id="arr12f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="10">
+                <text x="30" y="30" fill="#f0b35c">WRITE PATH — eager: happens whether or not anyone asks</text>
+                <rect x="30" y="46" width="150" height="44" rx="9" fill="#1a2133" stroke="#2b3859"/>
+                <text x="105" y="64" text-anchor="middle" fill="#d9e0ee" font-size="9">event log</text>
+                <text x="105" y="78" text-anchor="middle" fill="#636d83" font-size="8.5">(immutable)</text>
+                <rect x="240" y="46" width="170" height="44" rx="9" fill="#1a2133" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="325" y="64" text-anchor="middle" fill="#f0b35c" font-size="9">stream + batch stages</text>
+                <text x="325" y="78" text-anchor="middle" fill="#636d83" font-size="8.5">deterministic, idempotent</text>
+                <rect x="480" y="46" width="130" height="44" rx="9" fill="#1a2133" stroke="#f0b35c" stroke-width="1.3"/>
+                <text x="545" y="64" text-anchor="middle" fill="#f0b35c" font-size="9">cache builder</text>
+                <text x="545" y="78" text-anchor="middle" fill="#636d83" font-size="8.5">optional precompute</text>
+                <line x1="180" y1="68" x2="238" y2="68" stroke="#f0b35c" stroke-width="1.5" marker-end="url(#arr12e)"/>
+                <line x1="410" y1="68" x2="478" y2="68" stroke="#f0b35c" stroke-width="1.5" marker-end="url(#arr12e)"/>
+                <rect x="240" y="170" width="300" height="80" rx="12" fill="rgba(240,179,92,0.08)" stroke="#f0b35c" stroke-width="1.6"/>
+                <text x="390" y="196" text-anchor="middle" fill="#f0b35c" font-size="11">DERIVED DATASET</text>
+                <text x="390" y="214" text-anchor="middle" fill="#8d97ad" font-size="9">the search index / materialized view —</text>
+                <text x="390" y="230" text-anchor="middle" fill="#8d97ad" font-size="9">where the write path and read path meet</text>
+                <line x1="325" y1="90" x2="380" y2="168" stroke="#f0b35c" stroke-width="1.5" marker-end="url(#arr12e)"/>
+                <line x1="545" y1="90" x2="440" y2="168" stroke="#f0b35c" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arr12e)"/>
+                <text x="640" y="196" fill="#63dfc2">READ PATH — lazy:</text>
+                <text x="640" y="212" fill="#63dfc2">only when someone asks</text>
+                <rect x="620" y="240" width="130" height="40" rx="9" fill="#1a2133" stroke="#63dfc2" stroke-width="1.3"/>
+                <text x="685" y="257" text-anchor="middle" fill="#63dfc2" font-size="9">user queries</text>
+                <text x="685" y="270" text-anchor="middle" fill="#636d83" font-size="8.5">+ more processing</text>
+                <line x1="618" y1="240" x2="542" y2="226" stroke="#63dfc2" stroke-width="1.5" marker-end="url(#arr12f)"/>
+                <text x="30" y="300" fill="#8d97ad" font-size="9.5">no index → grep-like scans on reads (cheap writes, expensive reads) · precompute ALL queries → impossible (infinite set)</text>
+                <text x="30" y="318" fill="#d9e0ee" font-size="9.5">caches, indexes, materialized views = mechanisms to shift the boundary — do more on the write path to save effort on the read path</text>
+                <text x="30" y="336" fill="#636d83" font-size="9.5">the Twitter timeline (Ch 1) drew this boundary differently for celebrities than for ordinary users — full circle, 500 pages later</text>
+              </g>
+            </svg>
+            <p class="fig-caption">A full-text index shows the trade-off: writes must update index entries for all terms in the document; reads search each query word and apply Boolean logic. With no index, queries scan all documents (grep) — less write work, much more read work. Precomputing results for <em>all possible</em> queries would eliminate read logic but require infinite time and storage (the set of distinct queries with nonempty results is finite given a finite corpus, but exponential — still pretty bad news). A middle option: precompute results for the most common queries — a <strong>cache</strong>, or call it a <strong>materialized view</strong>, updated when new documents should appear in one of the cached results. Indexes, caches, and materialized views all play the same role: <strong>they shift the boundary between the write path and the read path</strong>, precomputing on writes to save effort on reads.</p>
+          </div>
+
+          <h3 id="s-offline">12.2.11 — Stateful, offline-capable clients</h3>
+          <p>The write-path/read-path boundary is worth exploring at the other end of the system — the client. The client/server model, with stateless clients and server authority over data, is so common we almost forget alternatives exist. But single-page JavaScript apps have gained stateful capabilities — client-side UI interaction, persistent local storage — and mobile apps store a lot of state on the device without round-tripping the server. Hence renewed interest in <strong>offline-first</strong> applications: do as much as possible on a local database in the device, sync with remote servers in the background when a connection exists — a big advantage for mobile devices with slow, unreliable connections, whose UIs then don’t wait on synchronous network requests. Think of the on-device state as a <strong>cache of state on the server</strong>: the pixels on the screen are a materialized view onto model objects in the client app, and the model objects are a local replica of state in a remote datacenter.</p>
+          <p>To keep that cache fresh, push state changes to clients. A typical web page reads data once at load and never learns about server changes until reload — a stale cache updated only by explicit polling (HTTP feed protocols like RSS are really just basic polling). Newer protocols move beyond request/response: <strong>server-sent events (EventSource) and WebSockets</strong> keep an open connection through which the server actively pushes messages. In write-path terms, actively pushing state changes to client devices means <strong>extending the write path all the way to the end user</strong>: the client uses a read path for its initial state, then relies on a stream of state changes. Devices will be offline sometimes and miss notifications — solved by Chapter 11’s consumer offsets: reconnect and resume without missing messages, where each device is a small subscriber to a small stream of events. Recent stateful-client toolchains (Elm; React, Flux, Redux) already manage client-side state by subscribing to a stream of events, structured similarly to event sourcing; extending the server’s state-change events into that pipeline would let state changes flow end to end — from the interaction on one device, via event logs and derived systems, to the user interface of another person’s device, with a delay of perhaps under a second. Instant messaging and online games already work this way; making it general requires moving away from request/response toward publish/subscribe, which is deeply ingrained in our databases, libraries, frameworks, and protocols. If you design data systems, keep in mind the option of subscribing to changes, not just querying current state.</p>
+
+          <h3 id="s-readevents">12.2.12 — Reads are events too</h3>
+          <p>When a stream processor writes derived data to a store, the store is the boundary between write and read paths — allowing random-access reads that would otherwise require scanning the whole log. But recall that stream processors already maintain state for aggregations and joins; some frameworks allow that state to be queried by outside clients, turning the stream processor itself into a kind of simple database. Take it further: represent <strong>read requests as events too</strong>, sending both read events and write events through a stream processor, which responds to read events by emitting results to an output stream. With both reads and writes routed to the same stream operator, you are performing a <strong>stream-table join between the stream of read queries and the database</strong> — the read event is sent to the partition holding the data, just as batch and stream processors co-partition join inputs. This correspondence is quite fundamental: <strong>a one-off read request passes through the join operator and immediately forgets; a subscribe request is a persistent join with past and future events on the other side.</strong></p>
+          <p>Recording a log of read events also helps with causal dependencies and provenance — reconstructing what the user saw before making a decision (did the predicted shipping date and inventory status affect the purchase?). It costs storage and I/O, and optimizing such systems is open research; but if you already log read requests for operational purposes, making the log the source of the requests is not such a great change.</p>
+
+          <h3 id="s-multipartition">12.2.13 — Multi-partition data processing</h3>
+          <p>For queries touching a single partition, routing through a stream is overkill. But the idea enables distributed execution of complex queries combining data from several partitions, using the stream processor’s existing message routing, partitioning, and joining infrastructure. Storm’s distributed RPC supports this pattern; it has been used to compute the number of people who have seen a URL on Twitter — the union of the follower sets of everyone who tweeted the URL, combining results from many partitions. Fraud prevention has the same shape: assessing whether a purchase is fraudulent requires examining the reputation scores of the user’s IP address, email address, billing address, shipping address, and so on — each reputation database itself partitioned, so a sequence of joins against differently partitioned datasets. MPP databases have similar internal query execution graphs, and if you need this kind of multi-partition join it is probably simpler to use a database that provides it — but treating queries as streams is an option for applications running at the limits of conventional off-the-shelf solutions.</p>
+        </section>
+        <!-- ================= 12.3 ================= -->
+        <section class="block reveal" id="s-correctness">
+          <p class="kicker">12.3 <span class="dim">·</span> Correctness, honestly</p>
+          <h2>Aiming for correctness</h2>
+          <p>With stateless services that only read data, something going wrong is not a big deal: fix the bug, restart, everything returns to normal. Stateful systems like databases are designed to remember things more or less forever, so if something goes wrong, the effects potentially last forever — they require more careful thought. For roughly four decades, <strong>atomicity, isolation, and durability</strong> have been the tools of choice for correct applications. But those foundations are weaker than they seem: witness the confusion around weak isolation levels (Chapter 7); transactions abandoned entirely in some systems in favor of better performance with much messier semantics (leaderless replication); “consistency” talked about constantly and poorly defined. Some people assert we should “embrace weak consistency” for availability without a clear idea of what that means in practice. For a topic this important, our understanding and engineering methods are surprisingly flaky — it is very difficult to determine whether it is safe to run a particular application at a particular isolation level or replication configuration, and Kyle Kingsbury’s <strong>Jepsen experiments</strong> have highlighted stark discrepancies between products’ claimed safety guarantees and their actual behavior in the presence of network problems and crashes. If you need stronger assurances, serializability and atomic commit are established approaches — at a cost: typically single-datacenter, limiting scale and fault tolerance.</p>
+
+          <h3 id="s-e2eonce">12.3.1 — Exactly-once execution of an operation</h3>
+          <p>Just because an application uses a data system with strong safety properties — serializable transactions even — does <strong>not</strong> mean the application is free from data loss or corruption: an application bug that writes incorrect or deletes good data is not saved by serializability. Immutability (Chapter 11) helps recovery but is not a cure-all. Look at a subtler corruption case. In Chapter 11 we met exactly-once (effectively-once) semantics: if something goes wrong while processing a message, you either give up (data loss) or try again — and if you try again, the risk is that the operation actually succeeded the first time and you just didn’t find out, so it takes effect twice. Processing twice is data corruption: charging a customer twice for the same service, incrementing a counter twice. The most effective approach is making the operation <strong>idempotent</strong> — same effect whether executed once or many times — but taking an operation that is not naturally idempotent and making it so requires effort: extra metadata (such as the set of operation IDs that have updated a value) and fencing when failing over between nodes.</p>
+
+          <h4>Duplicate suppression</h4>
+          <p>The need to suppress duplicates occurs far beyond stream processing. TCP uses sequence numbers on packets to order them and detect loss and duplication; lost packets are retransmitted and duplicates removed by the TCP stack before handing data to the application. But that suppression only works <strong>within a single TCP connection</strong>. Now consider the classic money-transfer transaction:</p>
+          <div class="code-block">BEGIN TRANSACTION;
+  UPDATE accounts SET balance = balance + 11.00 WHERE account_id = 1234;
+  UPDATE accounts SET balance = balance - 11.00 WHERE account_id = 4321;
+COMMIT;</div>
+          <p>In many databases a transaction is tied to the client connection. If the client suffers a network interruption after sending <code>COMMIT</code> but before hearing back, it doesn’t know whether the transaction committed or aborted (Chapter 8’s uncertainty). The client can reconnect and retry — but now it is outside the scope of TCP duplicate suppression, and since the transaction is not idempotent, <strong>$22 may be transferred instead of the desired $11</strong>. This transaction is a standard textbook example of transaction atomicity, yet it is actually not correct, and real banks do not work this way. Two-phase commit breaks the 1:1 mapping between TCP connection and transaction (the coordinator reconnects to tell a database the fate of an in-doubt transaction) — but that still doesn’t solve it, because of the network between the end-user device and the application server. A web browser submits instructions by HTTP POST; on a weak cellular connection the POST may succeed while the response is lost; the user is shown an error, and retries — the browser even warns “Are you sure you want to submit this form again?”, and the user says yes, because they wanted the operation to happen. (Post/Redirect/Get avoids the warning message in normal operation but doesn’t help if the POST times out.) From the web server’s point of view the retry is a separate request; from the database’s point of view a separate transaction. The usual deduplication mechanisms don’t help.</p>
+
+          <h3 id="s-opids">12.3.2 — Operation identifiers</h3>
+          <p>To make the operation idempotent across several hops of network communication, relying on a database transaction mechanism is not enough — you must consider the <strong>end-to-end flow of the request</strong>. Generate a unique identifier for the operation (a UUID as a hidden form field, or a hash of all relevant form fields), include it with every submission, and pass it all the way through to the database, where you ensure you only ever execute one operation per ID:</p>
+          <div class="code-block">ALTER TABLE requests ADD UNIQUE (request_id);
+BEGIN TRANSACTION;
+  INSERT INTO requests
+    (request_id, from_account, to_account, amount)
+    VALUES ('0286FDB8-D7E1-423F-B40B-792B3608036C', 4321, 1234, 11.00);
+  UPDATE accounts SET balance = balance + 11.00 WHERE account_id = 1234;
+  UPDATE accounts SET balance = balance - 11.00 WHERE account_id = 4321;
+COMMIT;</div>
+          <p>The mechanism is the <strong>uniqueness constraint on request_id</strong>: a duplicate submission tries to insert an ID that already exists, the INSERT fails, the transaction aborts — the operation cannot take effect twice. Relational databases can generally maintain a uniqueness constraint correctly even at weak isolation levels, whereas an application-level check-then-insert can fail under non-serializable isolation (Chapter 7’s write skew and phantoms). Bonus: the requests table is effectively an <strong>event log</strong>, hinting at event sourcing — the account balance updates don’t even have to happen in the same transaction, since they could be derived downstream from the request event, as long as the event is processed exactly once, which is again enforced by the request ID.</p>
+
+          <h3 id="s-e2eargument">12.3.3 — The end-to-end argument</h3>
+          <p>Duplicate suppression is one instance of a general principle articulated by Saltzer, Reed, and Clark in 1984:</p>
+          <div class="callout story">
+            <p class="callout-title">The end-to-end argument (1984)</p>
+            <p>“The function in question can completely and correctly be implemented only with the knowledge and help of the application standing at the endpoints of the communication system. Therefore, providing that questioned function as a feature of the communication system itself is not possible. (Sometimes an incomplete version of the function provided by the communication system may be useful as a performance enhancement.)”</p>
+          </div>
+
+          <div class="figure">
+            <p class="fig-head">Figure 12-C (recreated) · End-to-end duplicate suppression across the layers</p>
+            <svg viewBox="0 0 780 400" role="img" aria-label="A browser form carries a unique operation ID down through the web server and into the database; each layer has its own deduplication — TCP per connection, the stream processor within the framework — but only the end-to-end request ID at the database survives a user retry after a timeout" style="width:100%;height:auto;display:block">
+              <defs>
+                <marker id="arr12g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#f0b35c"/>
+                </marker>
+                <marker id="arr12h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#ef8080"/>
+                </marker>
+                <marker id="arr12i" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#63dfc2"/>
+                </marker>
+              </defs>
+              <g font-family="monospace" font-size="10">
+                <rect x="150" y="30" width="480" height="60" rx="10" fill="#1a2133" stroke="#f0b35c" stroke-width="1.4"/>
+                <text x="390" y="52" text-anchor="middle" fill="#f0b35c">USER’S BROWSER — the form carries operation ID (UUID)</text>
+                <text x="390" y="70" text-anchor="middle" fill="#636d83" font-size="9">“Are you sure you want to submit this form again?” — YES (the first POST timed out)</text>
+                <rect x="150" y="130" width="480" height="54" rx="10" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="390" y="152" text-anchor="middle" fill="#d9e0ee">WEB SERVER — two requests, one intent</text>
+                <text x="390" y="170" text-anchor="middle" fill="#636d83" font-size="9">from here they look like separate POSTs; same operation ID both times</text>
+                <rect x="150" y="226" width="480" height="54" rx="10" fill="#1a2133" stroke="#8d97ad" stroke-width="1.3"/>
+                <text x="390" y="248" text-anchor="middle" fill="#d9e0ee">DATABASE — UNIQUE(request_id)</text>
+                <text x="390" y="266" text-anchor="middle" fill="#636d83" font-size="9">the duplicate INSERT fails → the whole transaction aborts → charged exactly once</text>
+                <line x1="390" y1="90" x2="390" y2="128" stroke="#f0b35c" stroke-width="1.6" marker-end="url(#arr12g)"/>
+                <line x1="390" y1="184" x2="390" y2="224" stroke="#f0b35c" stroke-width="1.6" marker-end="url(#arr12g)"/>
+                <rect x="660" y="30" width="100" height="250" rx="10" fill="#151c30" stroke="#2b3859"/>
+                <text x="710" y="52" text-anchor="middle" fill="#8d97ad" font-size="8.5">the layers’</text>
+                <text x="710" y="64" text-anchor="middle" fill="#8d97ad" font-size="8.5">own dedup:</text>
+                <text x="710" y="90" text-anchor="middle" fill="#ef8080" font-size="8.5">TCP</text>
+                <text x="710" y="103" text-anchor="middle" fill="#636d83" font-size="8">per connection</text>
+                <text x="710" y="128" text-anchor="middle" fill="#ef8080" font-size="8.5">stream</text>
+                <text x="710" y="141" text-anchor="middle" fill="#ef8080" font-size="8.5">proc. x1</text>
+                <text x="710" y="154" text-anchor="middle" fill="#636d83" font-size="8">in-framework</text>
+                <text x="710" y="179" text-anchor="middle" fill="#ef8080" font-size="8.5">2PC</text>
+                <text x="710" y="192" text-anchor="middle" fill="#636d83" font-size="8">per txn</text>
+                <text x="710" y="222" text-anchor="middle" fill="#63dfc2" font-size="8.5">op ID</text>
+                <text x="710" y="235" text-anchor="middle" fill="#63dfc2" font-size="8">end-to-end</text>
+                <text x="710" y="248" text-anchor="middle" fill="#63dfc2" font-size="8">✓ survives</text>
+                <text x="710" y="261" text-anchor="middle" fill="#63dfc2" font-size="8">the retry</text>
+                <line x1="660" y1="95" x2="632" y2="95" stroke="#ef8080" stroke-width="1.2" stroke-dasharray="3 2" marker-end="url(#arr12h)"/>
+                <line x1="660" y1="147" x2="632" y2="147" stroke="#ef8080" stroke-width="1.2" stroke-dasharray="3 2" marker-end="url(#arr12h)"/>
+                <line x1="660" y1="185" x2="632" y2="185" stroke="#ef8080" stroke-width="1.2" stroke-dasharray="3 2" marker-end="url(#arr12h)"/>
+                <line x1="660" y1="240" x2="632" y2="240" stroke="#63dfc2" stroke-width="1.4" marker-end="url(#arr12i)"/>
+                <rect x="60" y="310" width="660" height="60" rx="10" fill="#151c30" stroke="#2b3859"/>
+                <text x="390" y="330" text-anchor="middle" fill="#8d97ad" font-size="9.5">the same argument covers integrity and encryption: Ethernet/TCP/TLS checksums can’t catch software bugs at either end or on disk;</text>
+                <text x="390" y="346" text-anchor="middle" fill="#8d97ad" font-size="9.5">WiFi passwords and TLS don’t protect against server compromise — only end-to-end checksums and end-to-end encryption do.</text>
+                <text x="390" y="362" text-anchor="middle" fill="#636d83" font-size="9.5">the low-level features still help (they reduce the probability of problems) — they are just not sufficient.</text>
+              </g>
+            </svg>
+            <p class="fig-caption">The function in question was duplicate suppression. TCP suppresses duplicates at the connection level; stream processors provide exactly-once at the message-processing level; 2PC coordinates a transaction’s participants — but none of them can prevent a user from submitting a duplicate request when the first one times out. The solution is end-to-end: an operation identifier passed all the way from the end-user client to the database. The same honesty applies to why we can’t just wrap this up: fault-tolerance mechanisms are hard to get right, the low-level ones (like TCP) work well enough that the remaining high-level faults are rare — it would be nice to wrap the remaining machinery in an abstraction so application code needn’t worry, but we have not yet found the right abstraction. Transactions collapse a huge range of issues down to commit-or-abort, which is a massive simplification — but not enough. When we refuse distributed transactions as too expensive, we end up reimplementing fault tolerance in application code, and reasoning about concurrency and partial failure is difficult and counterintuitive — so most application-level mechanisms don’t work correctly, and the consequence is lost or corrupted data.</p>
+          </div>
+
+          <h3 id="s-constraints">12.3.4 — Enforcing constraints</h3>
+          <p>End-to-end duplicate suppression works via a request ID passed from client to database. What about other constraints? Focus on <strong>uniqueness</strong> — a username or email uniquely identifying a user, a file storage service having at most one file per name, two people not booking the same seat on a flight. Other constraints behave very similarly: an account balance never going negative, not selling more items than in stock, a meeting room with no overlapping bookings. In a distributed setting, enforcing uniqueness requires <strong>consensus</strong>: with several concurrent requests for the same value, the system must decide which one is accepted and reject the rest as violations. The most common way: make a single node the leader in charge of all decisions — fine as long as you don’t mind funneling all requests through it (even if the client is on the other side of the world) and as long as it doesn’t fail; tolerating leader failure is the consensus problem again. Uniqueness checking can be scaled by partitioning on the value that must be unique (requests by request ID, usernames by hash of username). But <strong>asynchronous multi-master replication is ruled out</strong> — different masters could concurrently accept conflicting writes, and the values would no longer be unique. If you want to immediately reject writes that would violate the constraint, synchronous coordination is unavoidable.</p>
+
+          <h3 id="s-loguniqueness">12.3.5 — Uniqueness in log-based messaging</h3>
+          <p>The log ensures all consumers see messages in the same order — <strong>total order broadcast, equivalent to consensus</strong>. In the unbundled approach, a very similar recipe enforces uniqueness: if the log is partitioned by the value that needs to be unique, a stream processor consuming sequentially on a single thread can unambiguously and deterministically decide which of several conflicting operations came first. The username example, in three steps:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Append the request</h4><p>Every request for a username is encoded as a message and appended to a partition determined by the hash of the username.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Decide sequentially</h4><p>A stream processor reads the partition’s requests in order, using a local database to track which usernames are taken. For each available name it records it as taken and emits a success message; for each taken name it emits a rejection message — to output streams.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>The client watches the output</h4><p>The requesting client watches the output stream and waits for the success or rejection corresponding to its request.</p></div></div>
+          </div>
+          <p>This is basically the same algorithm as implementing linearizable storage with total order broadcast (Chapter 9), and it scales to a large request throughput by increasing partitions, each processed independently. It works for many kinds of constraints, not just uniqueness — the principle is that <strong>any writes that may conflict are routed to the same partition and processed sequentially</strong>, and the stream processor can use arbitrary logic to validate a request (an idea pioneered by Bayou in the 1990s). The definition of a conflict depends on the application.</p>
+
+          <h3 id="s-multipartreq">12.3.6 — Multi-partition request processing</h3>
+          <p>Ensuring an operation executes atomically while satisfying constraints gets more interesting when several partitions are involved. The money transfer touches three: the partition containing the request ID, the payee’s account, and the payer’s account — three things with no reason to co-locate. The traditional database answer is an atomic commit across all three partitions, which forces the transaction into a total order with respect to all other transactions on those partitions; cross-partition coordination means partitions can no longer be processed independently, and throughput suffers. But equivalent correctness is achievable with partitioned logs and <strong>no atomic commit</strong>:</p>
+          <div class="num-grid">
+            <div class="num-card"><span class="n">1.</span><div><h4>Log the request once</h4><p>The transfer request gets a unique request ID from the client and is appended to a single log partition based on that ID. A single-object write is atomic in almost all data systems — the request either appears in the log or it doesn’t.</p></div></div>
+            <div class="num-card"><span class="n">2.</span><div><h4>Derive the instructions</h4><p>A stream processor reads the request log and emits two messages: a debit instruction partitioned by the payer’s account, a credit instruction partitioned by the payee’s — each carrying the original request ID.</p></div></div>
+            <div class="num-card"><span class="n">3.</span><div><h4>Dedupe and apply</h4><p>Downstream processors consume the credit and debit streams, deduplicate by request ID, and apply the changes. If the step-2 processor crashes and resumes from its checkpoint, it may produce the instructions twice — but deterministically identically, so deduplication by the end-to-end request ID catches it.</p></div></div>
+          </div>
+          <p>Steps 1–2 exist because a client sending the credit and debit instructions directly would need an atomic commit across two partitions to guarantee both-or-neither. Log the request as one message first, then derive the instructions from it. To prevent overdrawing, add a stream processor partitioned by payer account that maintains balances and validates transactions, placing only valid transactions into the request log. Same correctness property — every request applied exactly once to both accounts, even in the presence of faults — without an atomic commit protocol.</p>
+
+          <h3 id="s-timeliness">12.3.7 — Timeliness and integrity</h3>
+          <p>Transactions are typically linearizable: a writer waits for the commit, and thereafter its writes are immediately visible to all readers. Unbundling an operation across multiple stream processor stages abandons that by design — consumers of a log are asynchronous, so a sender doesn’t wait. (A client <em>can</em> wait for a message to appear on an output stream, as in the username example; but note that the correctness of the uniqueness check never depended on the waiting — the notification is decoupled from the effects.) This suggests that the term <strong>consistency</strong> conflates two requirements worth separating:</p>
+          <div class="term-grid">
+            <div class="term">
+              <h4>Timeliness <span class="tag">up-to-date-ness</span></h4>
+              <p>Ensuring users observe the system in an up-to-date state. Reading stale data may show inconsistency, but it is <strong>temporary and resolves by waiting and trying again</strong>. CAP’s “C” is linearizability — a strong way of achieving timeliness; read-after-write consistency is a weaker, useful timeliness property.</p>
+            </div>
+            <div class="term">
+              <h4>Integrity <span class="tag">no corruption</span></h4>
+              <p>Absence of corruption: no data loss, no contradictory or false data. If a derived dataset is a view onto underlying data, the derivation must be correct — an index with records missing is not very useful. If integrity is violated, the inconsistency is <strong>permanent: waiting and trying again will not fix it</strong> — explicit checking and repair is needed. In ACID, “consistency” is usually an application-specific notion of integrity; atomicity and durability are tools for preserving it.</p>
+            </div>
+          </div>
+          <div class="callout warn">
+            <p class="callout-title">In slogan form</p>
+            <p>Violations of timeliness are “eventual consistency”; violations of integrity are <strong>“perpetual inconsistency.”</strong> In most applications, integrity is much more important: timeliness violations can be annoying and confusing, but integrity violations can be catastrophic. On a credit-card statement, a transaction from the last 24 hours not yet appearing is normal — banks reconcile asynchronously, and timeliness is not very important. But a statement balance that doesn’t equal the sum of the transactions plus the previous balance, or a transaction charged to you but not paid to the merchant — that is a violation of integrity.</p>
+          </div>
+          <p>ACID transactions usually provide both timeliness (linearizability) and integrity (atomic commit), which is why the distinction rarely matters within them. The interesting property of event-based dataflow systems is that <strong>they decouple the two</strong>: asynchronous processing gives no timeliness guarantee unless you explicitly build consumers that wait — but integrity is central to streaming systems. Exactly-once semantics is an integrity mechanism: a lost event or a doubly-effective event violates integrity, so fault-tolerant delivery and duplicate suppression (idempotent operations) are how it is preserved — achieved through a combination of: representing a write as a single message (fits naturally with event sourcing), deriving all other state updates from that message with deterministic derivation functions (like stored procedures), passing a client-generated request ID through all levels for end-to-end duplicate suppression, and making messages immutable and derived data reprocessable for easier recovery from bugs.</p>
+
+          <h3 id="s-loose">12.3.8 — Loosely interpreted constraints and coordination-avoiding systems</h3>
+          <p>Enforcing strict uniqueness requires consensus — funneling events through a single node per partition. That is unavoidable for the traditional form of uniqueness, and stream processing cannot avoid it. But many real applications get away with much weaker notions:</p>
+          <ul class="checklist">
+            <li><strong>Username or seat double-booked</strong> → send one user an apology and ask them to pick another — a <strong>compensating transaction</strong>.</li>
+            <li><strong>Customers order more than the warehouse holds</strong> → order more stock, apologize, offer a discount — which is exactly what you would do if a forklift ran over some of the stock anyway. The apology workflow is already part of the business; a linearizable stock constraint may be unnecessary.</li>
+            <li><strong>Airlines and hotels deliberately overbook</strong>, expecting no-shows, with refunds, upgrades, and the neighboring hotel’s complimentary room as compensation processes — needed anyway for weather cancellations and strikes.</li>
+            <li><strong>Overdrawn accounts</strong> → the bank charges an overdraft fee and asks for repayment; daily withdrawal limits bound the risk.</li>
+          </ul>
+          <p>In many business contexts it is acceptable to temporarily violate a constraint and fix it up later by apologizing. The cost of the apology (money, reputation) varies but is often low: you can’t unsend an email but you can send a correction; a double-charged card can be refunded at the cost of processing fees and perhaps a complaint. Whether the cost is acceptable is a business decision — and if it is, the traditional model of checking all constraints <em>before writing the data</em> is unnecessarily restrictive. You can still ensure validation occurs before doing things that are expensive to recover from, without requiring it before the write. These applications require <strong>integrity</strong> — never lose a reservation, never let money disappear into mismatched credits and debits — but not <strong>timeliness</strong> of enforcement.</p>
+          <p>Two observations combine: (1) dataflow systems can maintain integrity guarantees on derived data without atomic commit, linearizability, or synchronous cross-partition coordination; (2) many applications are fine with loose, temporarily-violable constraints as long as integrity holds throughout. Together: <strong>coordination-avoiding data systems</strong> — better performance and fault tolerance than systems requiring synchronous coordination. Such a system could run distributed across multiple datacenters in a multi-leader configuration, asynchronously replicating between regions, each datacenter operating independently: weak timeliness guarantees (not linearizable without coordination) but strong integrity guarantees. Serializable transactions remain useful at a small scope where they work well; heterogeneous XA-style transactions are not required; coordination can be introduced only where genuinely needed. One way to see it: <strong>coordination and constraints reduce the apologies you make for inconsistencies, but potentially reduce performance and availability, thus increasing the apologies you make for outages</strong>. You cannot reduce apologies to zero — aim for the sweet spot where there are neither too many inconsistencies nor too many availability problems.</p>
+
+          <h3 id="s-verify">12.3.9 — Trust, but verify</h3>
+          <p>All this correctness machinery rests on a system model: some things can happen (process crashes, power loss, arbitrary network delays), others cannot (data lost after fsync, memory corruption, the CPU’s multiplication instruction returning wrong results). Reasonable assumptions — true most of the time — but in reality it is a question of <em>probabilities</em>. We have seen data corrupted while sitting untouched on disks, and network corruption that evades TCP checksums. The author recounts working on an application whose client crash reports could only be explained by random bit-flips in those devices’ memory; unlikely, but with enough devices, even very unlikely things happen. Pathological memory access patterns can flip bits even in healthy memory — <strong>rowhammer</strong>, usable to break OS security mechanisms. Random bit-flips remain very rare on modern hardware — they are just not beyond the realm of possibility.</p>
+          <p>Beyond hardware, there is always the risk of <strong>software bugs</strong>, which no network, memory, or filesystem checksum catches. Even widely used, battle-tested databases have bugs: the author has personally seen MySQL failing to correctly maintain a uniqueness constraint and PostgreSQL’s serializable isolation exhibiting write skew anomalies. Application code is far worse — most applications don’t get anything near database-grade review and testing, and many don’t even correctly use the integrity features databases offer (foreign keys, uniqueness constraints). ACID’s notion of consistency assumes the transaction is bug-free; if the application uses the database incorrectly — say, an unsafe weak isolation level — integrity cannot be guaranteed.</p>
+          <p>With both hardware and software falling short of the ideal, data corruption is inevitable sooner or later — so at least have a way to find out. Checking integrity is called <strong>auditing</strong>, and it is not just for finance, though finance prizes it precisely because everyone knows mistakes happen. Mature systems manage this risk actively: large-scale storage systems such as <strong>HDFS and Amazon S3 do not fully trust disks</strong> — background processes continually read files back, compare them to other replicas, and move files from one disk to another to mitigate silent corruption. If you want to be sure your data is still there, you have to actually read it and check; and if it isn’t there, you want to find out sooner rather than later. By the same argument, test restoring from your backups from time to time — otherwise you may find the backup is broken only when you have already lost data. <strong>Don’t just blindly trust that it is all working.</strong></p>
+
+          <h3 id="s-audit">12.3.10 — Designing for auditability</h3>
+          <p>Not many systems currently have this “trust, but verify” approach of continually auditing themselves; many assume correctness guarantees are absolute and make no provision for rare corruption. The author fears the culture of ACID databases led to building on <em>blind trust</em> in a mechanism, neglecting auditability — and then the landscape changed: weaker consistency became the norm under the NoSQL banner, less mature storage technologies became widespread, but the audit mechanisms had not been developed, so we kept blindly trusting even as it became more dangerous. What designing for auditability looks like:</p>
+          <ul class="checklist">
+            <li><strong>Events over mutations.</strong> If a transaction mutates several objects, it is difficult to tell after the fact what it <em>meant</em>; even the transaction log’s inserts, updates, and deletes don’t give a clear picture of why — the application logic that decided them is transient and irreproducible. Event-based systems are better: user input as a single immutable event, state updates derived from it deterministically and repeatably.</li>
+            <li><strong>Check by recomputation.</strong> Explicit dataflow makes provenance clear: hash the event log to check it hasn’t been corrupted; rerun the batch and stream processors that derived state to check you get the same result — or run a redundant derivation in parallel.</li>
+            <li><strong>Time-travel debugging.</strong> A deterministic, well-defined dataflow makes it possible to reproduce the exact circumstances that led to an unexpected event — diagnosing <em>why</em> something happened.</li>
+          </ul>
+          <p>The end-to-end argument applies again: the more systems included in an integrity check, the fewer opportunities for corruption to go unnoticed — checking that an entire derived pipeline is correct end to end implicitly covers every disk, network, service, and algorithm along the path. And continuous end-to-end integrity checks give confidence, which lets you move faster — like automated testing, auditing increases the chance bugs are found quickly, reducing the risk that a change or a new storage technology causes damage. As for tooling: few data systems make auditability a top-level concern today; some applications log changes to a separate audit table, but guaranteeing the integrity of the audit log <em>and</em> the database state is difficult (a transaction log can be made tamper-proof by periodically signing it with a hardware security module — but that doesn’t guarantee the right transactions went in). Cryptographic tools — <strong>Merkle trees</strong> (trees of hashes proving a record appears in a dataset), certificate transparency, and the integrity-checking ideas of distributed ledgers like Bitcoin and Ethereum (with the author skeptical of their Byzantine fault tolerance and finding proof of work “extraordinarily wasteful”) — are interesting foundations for future self-validating, self-auditing data systems.</p>
+        </section>
+        <!-- ================= 12.4 ================= -->
+        <section class="block reveal" id="s-ethics">
+          <p class="kicker">12.4 <span class="dim">·</span> The chapter the industry skips</p>
+          <h2>Doing the right thing</h2>
+          <p>Every system is built for a purpose; every action has intended and unintended consequences. The purpose may be as simple as making money, but the consequences for the world may reach far beyond it. <strong>We, the engineers building these systems, have a responsibility to consider those consequences and consciously decide what kind of world we want to live in.</strong> We talk about data as an abstract thing, but remember that many datasets are about people — their behavior, their interests, their identity — and must be treated with humanity and respect; users are humans too, and human dignity is paramount. There are guidelines — the ACM’s Software Engineering Code of Ethics and Professional Practice — but they are rarely discussed, applied, and enforced in practice, and engineers and product managers sometimes take a cavalier attitude to privacy and negative consequences. A technology is not good or bad in itself; what matters is how it is used and how it affects people — true of a search engine much as of a gun. It is not sufficient for engineers to focus exclusively on the technology and ignore its consequences: <strong>the ethical responsibility is ours to bear too</strong>.</p>
+
+          <h3 id="s-predictive">12.4.1 — Predictive analytics</h3>
+          <p>Predictive analytics is a major part of the Big Data hype. Using data analysis to predict the weather or the spread of diseases is one thing; predicting whether a convict is likely to reoffend, whether a loan applicant is likely to default, or whether an insurance customer will make expensive claims is another matter entirely — those directly affect individual people’s lives. The incentives push toward “no”: payment networks want to prevent fraud, banks to avoid bad loans, airlines to avoid hijackings, companies to avoid untrustworthy hires; from their point of view a missed opportunity costs little while a bad loan or problematic employee costs much. But as algorithmic decision-making spreads, someone labeled risky (accurately or falsely) may suffer a large number of “no” decisions — systematically excluded from jobs, air travel, insurance, rental housing, financial services, and other key aspects of society. That is a large enough constraint on individual freedom to have been called an <strong>“algorithmic prison”</strong>: in countries respecting human rights the criminal justice system presumes innocence until proven guilty, but automated systems can systematically and arbitrarily exclude a person from society without proof of guilt and with little chance of appeal.</p>
+
+          <h3 id="s-bias">12.4.2 — Bias and discrimination</h3>
+          <p>Algorithmic decisions are not necessarily better or worse than human ones — every person has biases, and discriminatory practices can become institutionally embedded; there is genuine hope that basing decisions on data could be fairer. But predictive analytics does not merely automate a human’s decision rules: <strong>we leave the rules themselves to be inferred from data</strong>, and the learned patterns are opaque — even if a correlation exists, we may not know why. If there is systematic bias in the input, the system will most likely learn and amplify that bias in its output. Anti-discrimination laws prohibit treating people differently by protected traits; but what about other features correlated with them? In racially segregated neighborhoods, a postal code or even an IP address is a strong predictor of race. It is ridiculous to believe an algorithm could take biased data as input and produce fair and impartial output — an attitude satirized as <strong>“machine learning is like money laundering for bias.”</strong> Predictive systems merely extrapolate from the past; if the past is discriminatory, they codify that discrimination. If we want the future to be better than the past, moral imagination is required — and that is something only humans can provide. Data and models should be our tools, not our masters.</p>
+
+          <h4>Responsibility and accountability</h4>
+          <p>Automated decision-making opens the question of accountability. When a human makes a mistake, they can be held accountable and the affected person can appeal. Algorithms make mistakes too — but who answers for them? When a self-driving car causes an accident, who is responsible? If a credit-scoring algorithm systematically discriminates by race or religion, is there recourse? If a machine learning decision comes under judicial review, can you explain to the judge how the algorithm decided? Credit rating agencies are the old example of data-based decisions about people: a bad score makes life difficult, but it is at least based on relevant facts about the person’s borrowing history and errors can be corrected (though the agencies don’t make it easy). Machine-learning scorers use a much wider range of inputs and are far more opaque. The difference in question: <strong>a credit score asks “how did you behave in the past?” while predictive analytics asks “who is similar to you, and how did people like you behave?”</strong> — which implies stereotyping, for instance by where you live (a close proxy for race and socioeconomic class). What about people put in the wrong bucket? And much data is statistical: if average life expectancy in your country is 80, that doesn’t mean you drop dead on your 80th birthday — averages and distributions say little about individuals, and predictions will be wrong in individual cases. A blind belief in the supremacy of data for decisions is not only delusional, it is positively dangerous. On the positive side, analytics could focus aid and support on the people who most need it; as it stands, it is also used by predatory businesses to identify vulnerable people and sell them risky products — high-cost loans, worthless college degrees. And the problems compound through <strong>self-reinforcing feedback loops</strong>: employers using credit scores for hiring — a misfortune drops your score, the low score makes it harder to find work, joblessness pushes you toward poverty, further worsening the score. A downward spiral of poisonous assumptions, hidden behind a camouflage of mathematical rigor. Recommendation systems have their own version: good prediction shows people only opinions they already agree with — echo chambers where stereotypes, misinformation, and polarization breed, with visible impact on elections. Many consequences can be predicted by <strong>systems thinking</strong> — considering the entire system, not just the computerized parts but the people interacting with it: does it reinforce existing differences, or try to combat injustice? And even with the best intentions, beware unintended consequences.</p>
+
+          <h3 id="s-surveillance">12.4.3 — Privacy and tracking</h3>
+          <p>Beyond using data to make decisions <em>about</em> people, there are ethical problems with data collection itself: what is the relationship between the organizations collecting data and the people whose data is collected? When a system stores only what a user explicitly entered, the user is the customer — the system performs a service. But when activity is tracked and logged as a side effect of other things the user is doing, the service takes on interests of its own, which may conflict with the user’s. Some tracking genuinely serves users — clicked search results improve ranking, “people who liked X also liked Y” helps discovery, A/B tests improve interfaces. But when the service is funded through advertising, <strong>the advertisers are the actual customers</strong>, the users’ interests take second place, and tracking becomes more detailed, analyses further-reaching, retention longer — detailed profiles of each person for marketing. The right word for that relationship is <strong>surveillance</strong>. As a thought experiment, replace the word “data” with “surveillance” and see if the common phrases still sound good: “In our surveillance-driven organization we collect real-time surveillance streams and store them in our surveillance warehouse. Our surveillance scientists use advanced analytics and surveillance processing in order to derive new insights.” (Strong words — this is <em>Designing Surveillance-Intensive Applications</em> after all — but the point needs them.) In rushing toward an Internet of Things, we approach a world where every inhabited space contains at least one internet-connected microphone — smartphones, smart TVs, voice assistants, baby monitors, cloud-toys with a terrible security record. <strong>Even the most totalitarian regimes could only dream of putting a microphone in every room and forcing everyone to carry a location-tracking device — yet we volunteer, even enthusiastically.</strong> The difference is only that the collectors are corporations rather than government agencies. Not all data collection qualifies as surveillance, but examining it as such clarifies the relationship. Why do we accept it? Perhaps “nothing to hide” — i.e., you are in line with existing power structures, not a marginalized minority, and needn’t fear persecution; not everyone is so fortunate. Perhaps the purpose seems benign — but car insurance premiums linked to in-car tracking devices and health coverage contingent on wearing a fitness tracker make the picture less comfortable, and analysis can be shockingly intrusive: the motion sensor in a smartwatch can be used to work out what you are typing — including passwords — with fairly good accuracy. And the algorithms keep getting better.</p>
+
+          <h3 id="s-consent">12.4.4 — Consent and freedom of choice</h3>
+          <p>The defense: users voluntarily chose the service, agreed to the terms, so they consented — and receive a valuable service in exchange. The problems: users have little knowledge of what data they feed into our databases or how it is retained and processed, and <strong>most privacy policies do more to obscure than to illuminate — without understanding what happens to their data, users cannot give meaningful consent</strong>. Data from one user often says things about other people who never agreed to any terms; the derived datasets of Part III — entire user bases combined with behavioral tracking and external sources — are precisely what users cannot meaningfully understand. The extraction is one-way: no dialog, no negotiation of how much data for what service — the relationship is asymmetric, the terms set by the service. And for a user who does not consent, opting out is often not a free choice either: a service so popular it is regarded as essential for basic social participation is de facto mandatory — carrying a smartphone, using Facebook, using Google. Network effects impose a social cost on non-use, and declining is only realistic for the privileged few with the time and knowledge to understand the privacy policy and to forgo the social and professional opportunities. For the less privileged, there is no meaningful freedom of choice: <strong>surveillance becomes inescapable</strong>.</p>
+
+          <h3 id="s-decisionright">12.4.5 — Privacy and use of data</h3>
+          <p>“Privacy is dead” — some users post everything, so the claim goes. The claim is false and rests on a misunderstanding of the word. <strong>Privacy does not mean keeping everything secret; it means the freedom to choose which things to reveal to whom — a decision right</strong>, enabling each person to choose their position on the spectrum between secrecy and transparency in each situation. It is an important aspect of freedom and autonomy. When data is extracted through surveillance infrastructure, privacy rights are not so much eroded as <strong>transferred to the data collector</strong>: “trust us to do the right thing” means the right to decide what to reveal has moved from the individual to the company — which keeps much of the surveillance outcome secret, because revealing it would be perceived as creepy and would harm a business model that depends on knowing more about people than other companies do. Intimate information leaks out indirectly — for example, as ad targeting of people suffering a particular illness; even if individuals aren’t reidentifiable, <strong>they have lost their agency over the disclosure of intimate information</strong>. The company, not the user, exercises the privacy right, with the goal of maximizing profit. Companies aim to <em>not be perceived</em> as creepy — managing user perceptions rather than examining how intrusive collection actually is — and even that is often done poorly: something may be factually correct but trigger painful memories the user didn’t want resurfaced. Expect that any data may be wrong, undesirable, or inappropriate; build mechanisms for those failures; and be humble, planning for them. Privacy settings that let users control what <em>other users</em> see are a starting point, but the service itself retains unfettered access — free to process and analyze internally far beyond what is overtly visible.</p>
+
+          <h3 id="s-toxic">12.4.6 — Data as assets and power</h3>
+          <p>Behavioral data is sometimes called <strong>“data exhaust”</strong> — a worthless byproduct, with analytics as recycling. More honest is the reverse: when targeted advertising pays for a service, behavioral data about people is the <strong>core asset</strong>, and the application is merely a means to lure users into feeding more personal information into the surveillance infrastructure. The delight and creativity expressed through online services are cynically exploited by the data extraction machine. Supporting evidence: <strong>data brokers</strong>, a shady industry operating in secrecy, purchasing, aggregating, analyzing, inferring, and reselling intrusive personal data, mostly for marketing; startups valued by user numbers, by “eyeballs” — i.e., by their surveillance capabilities. Because the data is valuable, many want it: companies, and governments — via secret deals, coercion, legal compulsion, or simply stealing it. When a company goes bankrupt, its personal data is an asset that gets sold. And the data is hard to secure: breaches happen disconcertingly often. Critics call data not just an asset but a <strong>“toxic asset”</strong> or “hazardous material.” Whenever we collect data we must weigh benefits against the risk of it falling into the wrong hands: criminals or hostile intelligence services, insider leaks, unscrupulous management after an acquisition, or a regime, later, with no qualms about compelling us to hand it over. <strong>When collecting data, consider not just today’s political environment but all possible future governments</strong> — “it is poor civic hygiene to install technologies that could someday facilitate a police state.” “Knowledge is power,” and “to scrutinize others while avoiding scrutiny oneself is one of the most important forms of power” — which is why totalitarian governments want surveillance: it gives them control. Today’s technology companies are not overtly seeking political power, but the data they have accumulated gives them a great deal of power over our lives, much of it outside public oversight. A large-scale transfer of privacy rights from individuals to corporations is historically unprecedented: surveillance used to be expensive and manual, not scalable and automated; trust relationships (patient–doctor, defendant–attorney) have always existed, but governed by strict ethical, legal, and regulatory constraints — internet services amass sensitive information at massive scale without meaningful consent.</p>
+
+          <h3 id="s-industrial">12.4.7 — Remembering the Industrial Revolution</h3>
+          <p>Data is the defining feature of the information age, and comparisons to the Industrial Revolution come naturally. That revolution brought sustained economic growth and significantly improved living standards in the long run — and dreadful problems: air and water pollution, factory owners in splendor while workers lived in poor housing with long hours in harsh conditions, common and dangerous child labor. It took a long time before safeguards were established — environmental regulation, workplace safety, child-labor bans, food inspections. The cost of doing business increased, and society benefited hugely; few of us would want to go back. Just as the Industrial Revolution had a dark side that had to be managed, the information age has problems to confront, and data collection and misuse is one of them. In Bruce Schneier’s words:</p>
+          <div class="callout warn">
+            <p class="callout-title">Data is the pollution problem of the information age</p>
+            <p>“Data is the pollution problem of the information age, and protecting privacy is the environmental challenge. Almost all computers produce information. It stays around, festering. How we deal with it — how we contain it and how we dispose of it — is central to the health of our information economy. Just as we look back today at the early decades of the industrial age and wonder how our ancestors could have ignored the pollution in their rush to build an industrial world, our grandchildren will look back at us during these early decades of the information age and judge us on how we addressed the challenge of data collection and misuse. <strong>We should try to make them proud.</strong>”</p>
+          </div>
+          <p>Could legislation help? The 1995 European Data Protection Directive requires that personal data be “collected for specified, explicit and legitimate purposes and not further processed in a way incompatible with those purposes,” and be “adequate, relevant and not excessive” — rules that run directly counter to the Big Data philosophy of maximizing collection, combining datasets, and exploring for new insights, since exploration means using data for unforeseen purposes, the opposite of “specified and explicit.” Whether such legislation is effective in today’s internet context is doubtful; updated regulations are being developed. Companies collecting lots of data oppose regulation as a burden on innovation — to some extent justified (sharing medical data has privacy risks but might enable better diagnostics and treatments; over-regulation may prevent such breakthroughs, and balancing opportunity against risk is hard). Fundamentally, what is needed is a <strong>culture shift in the tech industry</strong>: stop regarding users as metrics to be optimized, and remember they are humans deserving respect, dignity, and agency; self-regulate data collection to maintain the trust of the people who depend on our software; educate end users about how their data is used rather than keeping them in the dark. The individual’s right to control their own data is like the natural environment of a national park: <strong>if we don’t explicitly protect and care for it, it will be destroyed — the tragedy of the commons</strong>, and we will all be worse off. Ubiquitous surveillance is not inevitable — we are still able to stop it. How exactly is an open question, but the beginnings are clear: <strong>don’t retain data forever — purge it as soon as it is no longer needed</strong> (which runs counter to immutability, but Chapter 11 showed the problem is solvable); enforce access control through cryptographic protocols rather than merely by policy. Above all, culture and attitude changes are necessary.</p>
+        </section>
+
+        <!-- ================= 12.5 ================= -->
+        <section class="block reveal" id="s-summary">
+          <p class="kicker">12.5 <span class="dim">·</span> The end of the book</p>
+          <h2>Summary</h2>
+          <p>No single tool efficiently serves all use cases, so applications necessarily compose several pieces of software — and batch processing and event streams let data changes flow between them. Certain systems are designated <strong>systems of record</strong>, and other data is derived from them through transformations: indexes, materialized views, ML models, statistical summaries. Making those derivations asynchronous and loosely coupled prevents a problem in one area from spreading, increasing the robustness of the whole. Expressing dataflows as transformations also helps <strong>evolve</strong> applications — change a processing step, rerun it on the whole input, rederive the output; something goes wrong, fix the code and reprocess to recover. These processes are quite similar to what databases do internally, hence the reframing as <strong>unbundling the database</strong> and building applications by composing loosely coupled components.</p>
+          <p>Derived state can be updated by observing changes in underlying data — and the derived state can itself be observed by downstream consumers, all the way to the end-user device, enabling interfaces that update dynamically and work offline. Correctness in the presence of faults: strong <strong>integrity</strong> guarantees are implementable scalably with asynchronous event processing, using end-to-end operation identifiers for idempotence and asynchronous constraint checking — clients either wait for the check or proceed and risk an apology. This is far more scalable and robust than distributed transactions, and fits how many business processes actually work. Structuring applications around dataflow and checking constraints asynchronously avoids most coordination, producing systems that maintain integrity, perform well, and stay geographically distributable — with audits to verify integrity and detect corruption.</p>
+          <p>And the final word of the book is not architectural but human: data can do significant harm — unappealable decisions about people’s lives, discrimination, exploitation, normalized surveillance, exposed intimate information, breaches, unintended consequences. As software and data have such a large impact on the world, <strong>we engineers carry a responsibility to work toward the kind of world we want to live in: a world that treats people with humanity and respect</strong>.</p>
+
+          <h3>Glossary</h3>
+          <dl class="kv">
+            <div class="kv-row"><dt>data integration</dt><dd>Making sure data ends up in the right form in all the right places — the problem that forces composing specialized tools, since the range of things you might want to do with data is “dizzyingly wide” and no single tool serves them all.</dd></div>
+            <div class="kv-row"><dt>system of record</dt><dd>The authoritative store where data is written first; all other representations are derived from it by processing its changelog in order. If CDC is the only way a derived system updates, it is consistent with the source (barring bugs).</dd></div>
+            <div class="kv-row"><dt>derived data vs distributed transactions</dt><dd>Two roads to multi-system consistency: 2PC orders writes with locks and enforces exactly-once with atomic commit; log-based systems order with a log and enforce with deterministic retry + idempotence. Transactions add linearizability; derived data is async — cheaper and more robust, but without timing guarantees by default.</dd></div>
+            <div class="kv-row"><dt>limits of total ordering</dt><dd>Total order broadcast ≡ consensus — a single leader’s throughput. Partitioning, multi-datacenter leaders, microservices with independent state, and offline-capable clients all introduce points where no defined order exists.</dd></div>
+            <div class="kv-row"><dt>dual gauge migration</dt><dd>The railway pattern for evolving a system: add a third rail so old and new gauges coexist, convert gradually, remove the extra rail at the end — the blueprint for maintaining old and new derived views side by side while shifting users over, every stage reversible.</dd></div>
+            <div class="kv-row"><dt>lambda architecture</dt><dd>Record immutable events; run a stream processor for fast approximate views and a batch processor over the same events for corrected views; merge at a serving layer. Influential for popularizing log-derived views and reprocessing — but two codebases to keep in sync, a hard merge for anything beyond simple aggregates, and incremental batch processing reintroduces streaming complexity.</dd></div>
+            <div class="kv-row"><dt>unifying batch and stream</dt><dd>One system, both workloads. Requires: replay of history through the same engine (log-based brokers, HDFS input), exactly-once semantics for stream processing, and windowing by event time (Beam API on Flink or Google Cloud Dataflow).</dd></div>
+            <div class="kv-row"><dt>unbundling the database</dt><dd>The observation that an organization’s dataflow looks like one huge database — batch and stream processors are elaborate triggers, stored procedures, and materialized-view maintenance; derived systems are index types — and the approach of building systems by composing those functions as standalone tools via derived data. Term proposed by Jay Kreps; also called “database inside-out.”</dd></div>
+            <div class="kv-row"><dt>federated database (polystore)</dt><dd>Unifying reads: a single query interface over many underlying storage engines (PostgreSQL foreign data wrappers). The relational tradition — elegant semantics, complicated implementation.</dd></div>
+            <div class="kv-row"><dt>unbundled writes</dt><dd>The harder half of composition: keeping writes to several storage systems in sync across technologies — via CDC and event logs with idempotent consumers, rather than distributed transactions. Loose coupling at system level (fault containment via log buffering) and human level (independent teams).</dd></div>
+            <div class="kv-row"><dt>breadth, not depth</dt><dd>Unbundling’s goal: not beating any single database at its own workload, but combining several for good performance across a much wider range of workloads. If one product satisfies all requirements, use it — composition is for when none does.</dd></div>
+            <div class="kv-row"><dt>derivation function</dt><dd>The transformation a dataset passes through: a secondary index (pick fields, sort), a full-text index (language detection, segmentation, stemming, spelling, synonyms, inverted index), an ML model (feature extraction over training data), a cache (UI-shaped aggregation). Built in when standard (CREATE INDEX); custom code otherwise — where databases struggle.</dd></div>
+            <div class="kv-row"><dt>separation of Church and state</dt><dd>Keeping stateless application logic separate from state management — the functional-programming joke (Church = lambda calculus = no mutable state). Databases as passive mutable shared variables you can only poll; subscribing to changes is only just emerging.</dd></div>
+            <div class="kv-row"><dt>write path</dt><dd>Everything that happens to data eagerly as it is written — through stream and batch stages until every derived dataset is updated — whether or not anyone ever asks to see it. Eager evaluation.</dd></div>
+            <div class="kv-row"><dt>read path</dt><dd>Everything that happens only when someone asks: querying the derived dataset, processing results, constructing the response. Lazy evaluation. Derived datasets sit exactly where the two paths meet.</dd></div>
+            <div class="kv-row"><dt>boundary-shifting</dt><dd>What caches, indexes, and materialized views fundamentally do: shift work from the read path to the write path by precomputing. No index = grep on reads; precomputing all queries = infinite work; caching the common ones = the useful middle. Twitter drew the boundary differently for celebrities than ordinary users.</dd></div>
+            <div class="kv-row"><dt>offline-first clients</dt><dd>State on end-user devices as a cache of server state: the pixels are a materialized view onto model objects, which are a local replica of the datacenter. Server-sent events and WebSockets push changes, extending the write path to the end user; consumer-offset-style reconnection handles offline gaps.</dd></div>
+            <div class="kv-row"><dt>reads are events too</dt><dd>Represent read requests as events through the same stream operator as writes — a stream-table join of queries against the database. A one-off read passes through the join and forgets; a subscription is a persistent join with past and future events. Also enables provenance: what the user saw before deciding.</dd></div>
+            <div class="kv-row"><dt>end-to-end argument</dt><dd>Saltzer, Reed &amp; Clark, 1984: a function can be completely and correctly implemented only with the knowledge and help of the application at the endpoints; providing it inside the communication system is not possible (incomplete versions may still help performance). Applies to duplicate suppression (TCP per-connection dedup can’t stop a user retry), integrity (end-to-end checksums), and encryption (end-to-end encryption).</dd></div>
+            <div class="kv-row"><dt>operation ID</dt><dd>The end-to-end fix for duplicate execution: a UUID or field-hash generated at the client, passed through every hop, enforced by a UNIQUE constraint at the database — which holds even at weak isolation levels, unlike application-level check-then-insert. Also makes the requests table an event log.</dd></div>
+            <div class="kv-row"><dt>uniqueness via logs</dt><dd>Partition the log by the value that must be unique; a single-threaded sequential consumer deterministically decides which conflicting write came first (first-come-wins) and emits success or rejection to an output stream the client watches. Total order broadcast in unbundled clothing; scales by adding partitions.</dd></div>
+            <div class="kv-row"><dt>multi-partition request processing</dt><dd>The atomic-commit alternative: log the whole request as one message (single-object writes are atomic), derive the per-partition instructions deterministically with the request ID attached, dedupe downstream. Same correctness as 2PC, no coordinator.</dd></div>
+            <div class="kv-row"><dt>timeliness</dt><dd>Users observe the system in an up-to-date state. Violations are temporary — waiting and retrying resolves them. “Eventual consistency.” Linearizability is a strong form; read-after-write a weaker useful one.</dd></div>
+            <div class="kv-row"><dt>integrity</dt><dd>Absence of corruption: no data loss, no contradictory data, correct derivations. Violations are permanent — explicit checking and repair required. “Perpetual inconsistency.” Exactly-once semantics is an integrity mechanism; in most applications, integrity matters far more than timeliness.</dd></div>
+            <div class="kv-row"><dt>compensating transaction</dt><dd>Apologizing for a constraint violation after the fact — refund the double charge, offer the neighboring hotel room, charge the overdraft fee. Many business processes already include apology workflows (forklift accidents, weather cancellations), making strict linearizable constraints unnecessary.</dd></div>
+            <div class="kv-row"><dt>coordination-avoiding data systems</dt><dd>Combining two observations — dataflow preserves integrity without coordination, and many applications tolerate loose constraints — yields systems that run multi-leader across datacenters, asynchronously replicate, and keep strong integrity with weak timeliness. Aim for the sweet spot in apologies: not too many inconsistency apologies, not too many outage apologies.</dd></div>
+            <div class="kv-row"><dt>auditing</dt><dd>Continually checking data integrity rather than blindly trusting guarantees. HDFS and S3 read files back and compare replicas; you should test your backups. Event-based systems audit well: hash the log, rerun derivations, reproduce failures deterministically — time-travel debugging.</dd></div>
+            <div class="kv-row"><dt>Merkle tree</dt><dd>A tree of hashes that efficiently proves a record appears in a dataset — the foundation of certificate transparency and the interesting part of distributed ledgers (the author is skeptical of Byzantine fault tolerance and calls proof of work “extraordinarily wasteful”).</dd></div>
+            <div class="kv-row"><dt>algorithmic prison</dt><dd>Being systematically excluded from jobs, travel, insurance, housing, and financial services by accumulated automated “no” decisions — without proof of guilt and with little chance of appeal, inverting the presumption of innocence.</dd></div>
+            <div class="kv-row"><dt>money laundering for bias</dt><dd>The satire of believing algorithms can take biased data as input and produce fair output: predictive systems extrapolate the past, and if the past is discriminatory, they codify and amplify that discrimination — postal codes standing in for race, credit scores feeding hiring spirals.</dd></div>
+            <div class="kv-row"><dt>surveillance</dt><dd>The honest name for tracking-funded relationships: advertisers are the customers, behavioral data is the core asset, and the application lures users into feeding the machine. Test: substitute “surveillance” for “data” and see if the phrase still sounds fine.</dd></div>
+            <div class="kv-row"><dt>privacy (as a decision right)</dt><dd>Not secrecy — the freedom to choose what to reveal to whom, where to sit on the secrecy–transparency spectrum in each situation. Surveillance doesn’t erase the right, it transfers it to the collector, who exercises it for profit.</dd></div>
+            <div class="kv-row"><dt>toxic asset</dt><dd>Data as a liability, not just an asset: breaches, insider leaks, bankruptcy asset sales, subpoenas, and future hostile regimes all put collected data at risk — “it is poor civic hygiene to install technologies that could someday facilitate a police state.” Schneier: data is the pollution problem of the information age.</dd></div>
+          </dl>
+
+          <h3>Further reading</h3>
+          <ul class="reading-list">
+            <li><strong>J. H. Saltzer, D. P. Reed, and D. D. Clark, “End-to-End Arguments in System Design”</strong><span class="src">ACM TOCS, November 1984 — the principle this chapter’s correctness argument is built on</span></li>
+            <li><strong>Jay Kreps, “The Log: What Every Software Engineer Should Know About Real-Time Data’s Unifying Abstraction”</strong><span class="src">engineering.linkedin.com, December 2013 — the unbundling argument’s closest ancestor</span></li>
+            <li><strong>Nathan Marz and James Warren, Big Data: Principles and Best Practices of Scalable Realtime Data Systems</strong><span class="src">Manning, 2015 — the lambda architecture from its author</span></li>
+            <li><strong>Jay Kreps, “Questioning the Lambda Architecture”</strong><span class="src">oreilly.com, July 2014 — the insider case against running two systems</span></li>
+            <li><strong>Raul Castro Fernandez, Peter Pietzuch, Jay Kreps, et al., “Liquid: Unifying Nearline and Offline Big Data Integration”</strong><span class="src">CIDR, January 2015 — unifying batch and stream processing</span></li>
+            <li><strong>Pat Helland, “Life Beyond Distributed Transactions: An Apostate’s Opinion”</strong><span class="src">CIDR, January 2007 — the case for coordination-avoiding, partition-tolerant approaches to related data</span></li>
+            <li><strong>Pat Helland, “Immutability Changes Everything”</strong><span class="src">CIDR, January 2015 — the truth is the log</span></li>
+            <li><strong>Kyle Kingsbury, “Jepsen: Analyzing the Effects of Network Partitions on Distributed Systems”</strong><span class="src">aphyr.com, 2013–2016 — claimed guarantees vs. actual behavior</span></li>
+            <li><strong>Bruce Schneier, Data and Goliath: The Hidden Battles to Collect Your Data and Control Your World</strong><span class="src">W. W. Norton, 2015 — “data is the pollution problem of the information age”</span></li>
+            <li><strong>ACM, “Software Engineering Code of Ethics and Professional Practice”</strong><span class="src">acm.org, 1999 — the rarely-discussed rules of the profession</span></li>
+          </ul>
+        </section>
+        <!-- ================= quiz ================= -->
+        <section class="quiz-wrap" id="quiz-section">
+          <div class="quiz-head">
+            <div>
+              <p class="kicker">Check yourself <span class="dim">· 13 questions</span></p>
+              <h2>Chapter 12 quiz</h2>
+              <p>Two written, eleven multiple-choice — the book’s thesis, end to end.</p>
+            </div>
+            <span class="chip" id="quiz-last">no score yet</span>
+          </div>
+          <div id="quiz"></div>
+          <button class="mark-complete" id="mark-complete" type="button">Mark chapter complete</button>
+        </section>
+
+        <nav class="lesson-pager">
+          <a class="pager-link" href="chapter11.html">
+            <span class="dir">← Previous</span>
+            <span class="title">Stream Processing</span>
+          </a>
+          <a class="pager-link next" href="../flashcards.html">
+            <span class="dir">Keep drilling →</span>
+            <span class="title">Flashcards</span>
+          </a>
+        </nav>
+
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container foot-inner">
+      <p>DDIA practice companion · a fan-made study aid for<br>“Designing Data-Intensive Applications” by Martin Kleppmann (O’Reilly)</p>
+      <p>static site · no trackers · progress in localStorage</p>
+    </div>
+  </footer>
+  <script>
+    window.QUIZ = {
+      lesson: 'chapter12',
+      questions: [
+        {
+          q: 'State the end-to-end argument (Saltzer, Reed, and Clark, 1984), and apply it to duplicate suppression in a web application: why don’t TCP, stream processors, and database transactions add up to exactly-once? Then reveal.',
+          short: true,
+          answer: 'The argument: “The function in question can completely and correctly be implemented only with the knowledge and help of the application standing at the endpoints of the communication system. Therefore, providing that questioned function as a feature of the communication system itself is not possible. (Sometimes an incomplete version of the function provided by the communication system may be useful as a performance enhancement.)” Applied to duplicate suppression: TCP removes duplicate packets — but only within a single TCP connection, so it cannot cover a client that reconnects and retries a transaction ($22 transferred instead of $11 — the textbook transfer transaction is actually not correct, and real banks don’t work that way). 2PC breaks the connection-to-transaction mapping but still can’t see the user. Stream processors provide exactly-once within the framework, but the framework ends at its boundary. And the browser-level retry — “Are you sure you want to submit this form again?” — is a separate request to the web server and a separate transaction to the database; the usual deduplication mechanisms don’t help. The end-to-end solution: a unique operation ID (UUID or field-hash) generated at the client, attached to the form, passed through every hop, and enforced by a UNIQUE constraint at the database — the duplicate INSERT fails and the transaction aborts, so the operation takes effect exactly once. The same argument covers integrity (end-to-end checksums, since Ethernet/TCP/TLS checksums can’t catch software bugs or disk corruption at the ends) and encryption (only end-to-end encryption covers all attackers). The low-level features still help — they reduce the probability of problems — they are just not sufficient.'
+        },
+        {
+          q: 'Explain the difference between timeliness and integrity, give the slogan version, and explain which one dataflow systems preserve and how. Then reveal.',
+          short: true,
+          answer: 'Timeliness: ensuring users observe the system in an up-to-date state — reading stale data may show inconsistency, but it is temporary and resolves by waiting and retrying (“eventual consistency”). Linearizability is a strong timeliness mechanism; read-after-write a weaker useful one. Integrity: absence of corruption — no data loss, no contradictory or false data, correct derivations (an index missing records is useless). If integrity is violated, the inconsistency is permanent — explicit checking and repair is needed (“perpetual inconsistency”). Slogan: violations of timeliness are eventual consistency; violations of integrity are perpetual inconsistency. In most applications integrity matters much more: a 24-hour-lagging credit card statement is normal (timeliness), but a balance that doesn’t equal the sum of transactions, or a charge paid by the customer but not made to the merchant, is catastrophic (integrity). ACID transactions typically provide both, which is why the distinction rarely matters inside them. Event-based dataflow systems decouple them: asynchronous processing gives no timeliness guarantee by default, but integrity is central — exactly-once semantics IS an integrity mechanism, preserved by representing writes as single messages, deterministic derivation functions, end-to-end request IDs for duplicate suppression, and immutable, reprocessable messages for bug recovery. That is what lets coordination-avoiding systems run multi-leader across datacenters with weak timeliness but strong integrity.'
+        },
+        {
+          q: 'What is the biggest practical problem with the lambda architecture?',
+          options: [
+            'It cannot handle more than one data source',
+            'The stream layer is always exactly correct, making the batch layer redundant',
+            'You must implement, debug, tune, and maintain the same logic in two different systems (batch and stream), and merge their separate outputs — easy for simple tumbling-window aggregates, significantly harder for joins, sessionization, or non-time-series outputs. And reprocessing full history is expensive, so the batch layer goes incremental, which reintroduces streaming complexity',
+            'Immutable event logs are illegal in some jurisdictions'
+          ],
+          answer: 2,
+          why: 'The lambda architecture was influential — it popularized deriving views from immutable event streams and reprocessing when needed — but Summingbird-style abstractions over both engines don’t remove the operational burden of two systems, the reconciliation gets hard beyond simple aggregates, and incremental batch processing (an hour’s worth per hour) drags in stragglers and boundary-crossing windows, making the batch layer resemble the streaming layer it was supposed to be simpler than. The escape: unify batch and stream in one system — replay through the same engine, exactly-once semantics, event-time windowing.'
+        },
+        {
+          q: 'Map the database internals to their standalone counterparts: transaction log, secondary/full-text index, materialized view maintenance.',
+          options: [
+            'Log → Redis; index → HDFS; views → message brokers',
+            'Log → Kafka (durable, replayable); indexes → Elasticsearch kept current via CDC; view maintenance → Spark/Flink batch and stream pipelines “turning the crank” on derived state',
+            'Log → application logs on each server; index → the shell; views → spreadsheets only',
+            'There is no correspondence — databases and external tools share no functionality'
+          ],
+          answer: 1,
+          why: 'This is unbundling: CREATE INDEX already behaves like reprocessing — scan a consistent snapshot, sort, write the index, then process the backlog of writes since the snapshot, then keep updating — exactly like setting up a new follower or bootstrapping CDC. The organization’s dataflow looks like one huge database, with batch/stream processors as elaborate triggers and materialized-view maintenance routines, and derived systems as different index types — just running on different machines, administered by different teams. Federation unifies reads (one query interface over many stores); unbundling unifies writes (CDC and event logs synchronizing changes).'
+        },
+        {
+          q: 'Derived data systems versus distributed transactions — what actually differs?',
+          options: [
+            'Nothing — they are two names for 2PC',
+            'Distributed transactions offer better performance in every case',
+            'Both aim to keep multiple systems consistent, but by different means: distributed transactions order writes with locks and enforce exactly-once with atomic commit; CDC/event sourcing order with a log and enforce with deterministic retry and idempotence. Transactions typically add linearizability (reading your own writes); derived data is asynchronous — cheaper and more fault-contained, but without timing guarantees by default',
+            'Derived data systems use linearizability; distributed transactions use eventual consistency'
+          ],
+          answer: 2,
+          why: 'XA’s poor fault tolerance and performance severely limit its usefulness, and even a better protocol would struggle to be adopted. Log-based derived data is the most promising integration approach — and the honesty about what it gives up (timing guarantees) is what motivates the chapter’s search for a middle ground: end-to-end identifiers, asynchronous constraint checks, and the timeliness/integrity split.'
+        },
+        {
+          q: 'Why isn’t a database transaction enough to guarantee exactly-once execution of a user operation?',
+          options: [
+            'Because database transactions are too slow for web applications',
+            'Because the transaction boundary ends at the database: TCP dedup is per-connection, the framework’s exactly-once ends at the stream processor’s edge, and a user retrying a timed-out POST (“Are you sure you want to submit this form again?”) is a separate request and a separate transaction. Only an end-to-end operation ID, enforced by a UNIQUE constraint at the database, covers the whole path',
+            'Because transactions cannot be serialized across tables',
+            'It is enough — serializable transactions guarantee no duplicates anywhere'
+          ],
+          answer: 1,
+          why: 'The classic $11 transfer example is a standard illustration of transaction atomicity, yet it is actually not correct, and real banks do not work this way. Each layer’s deduplication works only within that layer’s scope; the end-to-end argument says the function can only be correctly implemented at the endpoints. Bonus: the requests table with UNIQUE(request_id) doubles as an event log — the balance updates could even be derived downstream, as long as the event is processed exactly once, enforced by the request ID.'
+        },
+        {
+          q: 'What properties make derived state trustworthy — the reasons a dataflow architecture can recompute its way out of trouble?',
+          options: [
+            'It is stored in memory and replicated synchronously',
+            'It is derived through deterministic functions from an immutable, replayable log — so it can be rebuilt by reprocessing, checked by rerunning the derivation (or a redundant one), and recovered by fixing the code and replaying',
+            'It is always the result of a distributed transaction',
+            'It never changes'
+          ],
+          answer: 1,
+          why: 'Deterministic derivation with well-defined inputs is what makes auditing feasible: hash the event log to detect corruption, rerun batch and stream processors to verify results, reproduce failures deterministically for time-travel debugging. It is also what powers gradual evolution — old and new views side by side, users shifted over slowly, every stage reversible, like the railway companies adding a third rail for dual gauge.'
+        },
+        {
+          q: 'What do caches, indexes, and materialized views have fundamentally in common, in this chapter’s framing?',
+          options: [
+            'They are all stored in the same database',
+            'They all require linearizable writes',
+            'They shift the boundary between the write path and the read path — doing more work eagerly on writes (precomputing) to save work lazily on reads. No index means grep-like scans on reads; precomputing all possible queries is impossible; caching the most common queries is the useful middle',
+            'They are only useful in offline-first applications'
+          ],
+          answer: 2,
+          why: 'The write path is eager evaluation and the read path is lazy evaluation; the derived dataset is where they meet. The choice of boundary is a design decision — Twitter’s home timelines drew it differently for celebrities (fan-out on write) than for ordinary users, which is how the book began, and how this chapter closes the loop “after 500 pages we have come full circle.”'
+        },
+        {
+          q: 'What does it mean that “reads are events too”?',
+          options: [
+            'That read queries should be logged for billing purposes',
+            'That databases should disable read endpoints and only allow appends',
+            'That read requests can be represented as events routed through the same stream operator as writes — a stream-table join of the query stream against the database. A one-off read passes through the join and is forgotten; a subscription is a persistent join with past and future events. It also enables provenance: recording what the user saw before deciding',
+            'That reads are destructive operations like AMQP acknowledgments'
+          ],
+          answer: 2,
+          why: 'Some stream processing frameworks let operator state be queried directly, turning the processor into a simple database; routing read events to the partition holding the data generalizes this — the same co-partitioning rule that joins use. Multi-partition queries (Twitter URL reach, fraud-reputation lookups across IP/email/billing/shipping databases) ride the existing routing, partitioning, and joining infrastructure — though for those, an MPP database is probably simpler.'
+        },
+        {
+          q: 'How do you enforce a uniqueness constraint across partitions without an atomic commit protocol?',
+          options: [
+            'You cannot — 2PC is strictly required for any uniqueness',
+            'Route writes that may conflict to the same log partition and process them sequentially: a single-threaded stream consumer deterministically decides which conflicting write came first and emits success or rejection messages that the client watches for. This is total order broadcast again, scaled by adding partitions',
+            'Store everything in one giant partition',
+            'Disable the constraint and apologize to every user'
+          ],
+          answer: 1,
+          why: 'Strict uniqueness does require consensus — the log IS the consensus mechanism here (total order broadcast). The username flow: append requests to a partition chosen by hash of the username; the consumer tracks taken names in a local database and emits success or rejection to an output stream; the client watches the output. For multi-partition operations like a money transfer, log the request once (single-object writes are atomic), derive the per-partition credit and debit instructions with the request ID attached, and dedupe downstream — same correctness as atomic commit, no coordinator.'
+        },
+        {
+          q: 'What is a compensating transaction, and why does its existence matter for system design?',
+          options: [
+            'A transaction that runs on a faster database',
+            'A transaction that compensates engineers for overtime',
+            'A correction issued after a constraint was violated — the apology: refund one of two charges, offer the neighboring hotel room, charge the overdraft fee. Since apology workflows already exist in business processes (forklift accidents, weather cancellations), many applications can tolerate loosely enforced constraints — write optimistically, validate after the fact — preserving integrity without timeliness, and thus without coordination',
+            'A transaction that only ever executes once'
+          ],
+          answer: 2,
+          why: 'This is the basis of coordination-avoiding data systems: dataflow preserves integrity without atomic commit/linearizability/synchronous coordination, and many apps accept loose constraints. Combine the two and you get multi-datacenter, multi-leader, asynchronously replicated systems with weak timeliness and strong integrity. The trade-off in one line: coordination reduces inconsistency apologies but can increase outage apologies — aim for the sweet spot, you cannot reach zero.'
+        },
+        {
+          q: 'Why does the chapter argue data should be treated as a “toxic asset”?',
+          options: [
+            'Because databases are expensive to license',
+            'Because data loses value quickly, like perishable goods',
+            'Because beyond its value, collected data carries ongoing risk: breaches happen disconcertingly often, insiders leak, bankruptcies sell personal data as assets, governments obtain it by secret deals, coercion, legal compulsion, or theft — and a future regime might compel disclosure. “It is poor civic hygiene to install technologies that could someday facilitate a police state”',
+            'Because data cannot be encrypted'
+          ],
+          answer: 2,
+          why: 'Data brokers — a shady industry aggregating and reselling intrusive personal data — prove the market value; breaches and hostile takeovers prove the risk. The advice that follows: purge data as soon as it is no longer needed (solvable despite immutability, via Datomic-style excision), enforce access control cryptographically rather than by policy, and treat privacy as something to protect by architecture. Schneier’s framing: data is the pollution problem of the information age, and our grandchildren will judge us on how we handled it.'
+        },
+        {
+          q: 'The chapter’s position on privacy is that privacy is…',
+          options: [
+            'Dead — users post everything anyway, so the concept is obsolete',
+            'A purely legal question with no technical dimension',
+            'A decision right — the freedom to choose what to reveal to whom, where to sit on the secrecy–transparency spectrum in each situation. Surveillance doesn’t erase it; it transfers the right to the collector, which exercises it to maximize profit, keeping outcomes secret because revealing them would seem creepy',
+            'Only relevant to employees of the company'
+          ],
+          answer: 2,
+          why: 'The “privacy is dead” claim rests on a misunderstanding. Even when users cannot be personally reidentified from an ad-targeted bucket, they have lost agency over the disclosure of intimate information (like an illness). Consent is hollowed out by opacity: privacy policies obscure more than they illuminate, data says things about non-users too, and opting out of de facto mandatory services is only realistic for the privileged — for everyone else surveillance becomes inescapable. Hence the closing prescriptions: stop treating users as metrics, self-regulate, educate users, and don’t retain data forever.'
+        }
+      ]
+    };
+  </script>
+  <script src="../js/shared.js"></script>
+  <script src="../js/quiz.js"></script>
+  <script src="../js/toc.js"></script>
+</body>
+</html>
